@@ -1,0 +1,7 @@
+/target/
+**/*.rs.bk
+*.fdb
+*.wal
+.DS_Store
+.idea/
+.vscode/
