@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+crash-testing = []
+
 [dependencies]
 fs2 = "0.4"
 libc = "0.2"

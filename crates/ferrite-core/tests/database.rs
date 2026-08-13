@@ -261,3 +261,126 @@ fn conservative_limits_are_explicit() {
     assert!(matches!(db.transaction(&operations), Err(Error::Limit(_))));
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn checkpoint_rewrites_committed_state_and_allows_future_writes() {
+    let path = temp_dir("checkpoint");
+    let before;
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.put_key("keep", json!({"version": 1})).unwrap();
+        for index in 0..100 {
+            db.put_key("replace", json!({"version": index})).unwrap();
+        }
+        db.delete_key("replace").unwrap();
+        before = std::fs::metadata(path.join("data.wal")).unwrap().len();
+
+        db.checkpoint().unwrap();
+        let after = std::fs::metadata(path.join("data.wal")).unwrap().len();
+        assert!(after < before, "checkpoint did not compact the WAL");
+        assert_eq!(db.get("keep").unwrap(), Some(json!({"version": 1})));
+        db.put_key("future", json!(true)).unwrap();
+    }
+
+    let db = Database::open(&path).unwrap();
+    assert_eq!(db.get("keep").unwrap(), Some(json!({"version": 1})));
+    assert_eq!(db.get("replace").unwrap(), None);
+    assert_eq!(db.get("future").unwrap(), Some(json!(true)));
+    drop(db);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn new_database_persists_a_versioned_format_manifest() {
+    let path = temp_dir("format-manifest");
+    let db = Database::open(&path).unwrap();
+    drop(db);
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.join("format.json")).unwrap()).unwrap();
+    assert_eq!(manifest, json!({"format": 1}));
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn existing_wal_without_a_format_manifest_is_rejected() {
+    let path = temp_dir("missing-format-manifest");
+    std::fs::create_dir_all(&path).unwrap();
+    ferrite_core::wal::Wal::create(path.join("data.wal")).unwrap();
+
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("unversioned database unexpectedly opened"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::UnsupportedFormat(0)));
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn unsupported_format_manifest_is_rejected() {
+    let path = temp_dir("unsupported-format-manifest");
+    {
+        let db = Database::open(&path).unwrap();
+        drop(db);
+    }
+    std::fs::write(path.join("format.json"), br#"{"format":2}"#).unwrap();
+
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("unsupported database unexpectedly opened"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::UnsupportedFormat(2)));
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn checkpoint_chunks_large_databases_into_valid_transactions() {
+    let path = temp_dir("checkpoint-large");
+    {
+        let mut db = Database::open(&path).unwrap();
+        for index in 0..=ferrite_core::MAX_TRANSACTION_OPERATIONS {
+            db.put_key(&format!("key-{index}"), json!(index)).unwrap();
+        }
+        db.checkpoint().unwrap();
+    }
+
+    let db = Database::open(&path).unwrap();
+    assert_eq!(
+        db.get(&format!("key-{}", ferrite_core::MAX_TRANSACTION_OPERATIONS))
+            .unwrap(),
+        Some(json!(ferrite_core::MAX_TRANSACTION_OPERATIONS))
+    );
+    drop(db);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn unsafe_format_metadata_is_rejected() {
+    for fixture in ["directory", "symlink", "oversized"] {
+        let path = temp_dir(&format!("unsafe-format-{fixture}"));
+        {
+            let db = Database::open(&path).unwrap();
+            drop(db);
+        }
+        std::fs::remove_file(path.join("format.json")).unwrap();
+        match fixture {
+            "directory" => std::fs::create_dir(path.join("format.json")).unwrap(),
+            "symlink" => symlink("missing-format", path.join("format.json")).unwrap(),
+            "oversized" => {
+                let file = std::fs::File::create(path.join("format.json")).unwrap();
+                file.set_len((ferrite_core::MAX_VALUE_BYTES + 1) as u64)
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        assert!(
+            Database::open(&path).is_err(),
+            "accepted {fixture} manifest"
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}

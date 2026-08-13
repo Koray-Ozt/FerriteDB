@@ -13,7 +13,14 @@ pub use wal::{MAX_KEY_BYTES, MAX_TRANSACTION_OPERATIONS, MAX_VALUE_BYTES, MAX_WA
 
 const WAL_FILE: &str = "data.wal";
 const SCHEMA_FILE: &str = "schema.json";
+const FORMAT_FILE: &str = "format.json";
 const LOCK_FILE: &str = ".ferrite.lock";
+const CURRENT_FORMAT: u32 = 1;
+
+#[derive(Deserialize, Serialize)]
+struct FormatManifest {
+    format: u32,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Operation {
@@ -77,6 +84,30 @@ impl Database {
                 Error::Io(error)
             }
         })?;
+        let wal_path = path.join(WAL_FILE);
+        let format_path = path.join(FORMAT_FILE);
+        if schema_entry_exists(&format_path)? {
+            let bytes = read_bounded_regular_file(
+                &format_path,
+                MAX_VALUE_BYTES,
+                "format metadata",
+                "format metadata exceeds 1 MiB",
+            )?;
+            let manifest: FormatManifest = serde_json::from_slice(&bytes)
+                .map_err(|e| Error::Corrupt(format!("invalid format metadata: {e}")))?;
+            if manifest.format != CURRENT_FORMAT {
+                return Err(Error::UnsupportedFormat(manifest.format));
+            }
+        } else if wal_path.exists() {
+            return Err(Error::UnsupportedFormat(0));
+        } else {
+            let bytes = serde_json::to_vec_pretty(&FormatManifest {
+                format: CURRENT_FORMAT,
+            })
+            .map_err(Error::Json)?;
+            write_new_synced(&format_path, &bytes)?;
+            sync_dir(path)?;
+        }
         let schema_path = path.join(SCHEMA_FILE);
         let mut persist_schema = false;
         let schema = if schema_entry_exists(&schema_path)? {
@@ -98,7 +129,6 @@ impl Database {
             None
         };
 
-        let wal_path = path.join(WAL_FILE);
         let (wal, recovery) = if wal_path.exists() {
             let wal = wal::Wal::open(&wal_path)?;
             let recovery = wal::Recovery::read(&wal_path)?;
@@ -274,6 +304,52 @@ impl Database {
         Ok(())
     }
 
+    pub fn checkpoint(&mut self) -> Result<(), Error> {
+        if self.poisoned {
+            return Err(Error::DatabasePoisoned);
+        }
+
+        let staging_path = self.path.join(format!(
+            ".data.wal.ferrite-checkpoint-{}",
+            std::process::id()
+        ));
+        let mut staging = wal::Wal::create(&staging_path)?;
+        let mut next_transaction_id = self.next_transaction_id;
+        let result = (|| {
+            let entries = self.data.iter().collect::<Vec<_>>();
+            for chunk in entries.chunks(MAX_TRANSACTION_OPERATIONS) {
+                let id = next_transaction_id;
+                next_transaction_id = id
+                    .checked_add(1)
+                    .ok_or(Error::Limit("transaction id exhausted"))?;
+                staging.begin(id)?;
+                for (key, value) in chunk {
+                    let bytes = serde_json::to_vec(value).map_err(Error::Json)?;
+                    staging.put(id, key.as_bytes(), &bytes)?;
+                }
+                staging.commit(id)?;
+            }
+            Ok::<(), Error>(())
+        })();
+        if let Err(error) = result {
+            drop(staging);
+            let _ = fs::remove_file(&staging_path);
+            return Err(error);
+        }
+        drop(staging);
+        crash_at("checkpoint-after-staging-sync");
+
+        self.poisoned = true;
+        let wal_path = self.path.join(WAL_FILE);
+        fs::rename(&staging_path, &wal_path)?;
+        crash_at("checkpoint-after-rename");
+        sync_dir(&self.path)?;
+        self.wal = wal::Wal::open(&wal_path)?;
+        self.next_transaction_id = next_transaction_id;
+        self.poisoned = false;
+        Ok(())
+    }
+
     fn write_wal_transaction(
         &mut self,
         write: impl FnOnce(&mut wal::Wal) -> Result<(), wal::Error>,
@@ -391,27 +467,50 @@ fn sync_dir(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+fn crash_at(point: &str) {
+    #[cfg(feature = "crash-testing")]
+    if std::env::var_os("FERRITE_CRASH_AT").is_some_and(|value| value == point) {
+        std::process::abort();
+    }
+    #[cfg(not(feature = "crash-testing"))]
+    let _ = point;
+}
+
 fn read_schema(path: &Path) -> Result<Vec<u8>, Error> {
+    read_bounded_regular_file(
+        path,
+        MAX_VALUE_BYTES,
+        "schema metadata",
+        "schema exceeds 1 MiB",
+    )
+}
+
+fn read_bounded_regular_file(
+    path: &Path,
+    limit: usize,
+    description: &str,
+    limit_error: &'static str,
+) -> Result<Vec<u8>, Error> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
-        .map_err(|error| Error::Corrupt(format!("cannot safely open schema metadata: {error}")))?;
+        .map_err(|error| Error::Corrupt(format!("cannot safely open {description}: {error}")))?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
-        return Err(Error::Corrupt(
-            "schema metadata is not a regular file".into(),
-        ));
+        return Err(Error::Corrupt(format!(
+            "{description} is not a regular file"
+        )));
     }
-    if metadata.len() > MAX_VALUE_BYTES as u64 {
-        return Err(Error::Limit("schema exceeds 1 MiB"));
+    if metadata.len() > limit as u64 {
+        return Err(Error::Limit(limit_error));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.by_ref()
-        .take((MAX_VALUE_BYTES + 1) as u64)
+        .take((limit + 1) as u64)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_VALUE_BYTES {
-        return Err(Error::Limit("schema exceeds 1 MiB"));
+    if bytes.len() > limit {
+        return Err(Error::Limit(limit_error));
     }
     Ok(bytes)
 }
@@ -430,6 +529,7 @@ pub enum Error {
     Io(io::Error),
     DatabaseLocked,
     DatabasePoisoned,
+    UnsupportedFormat(u32),
     Wal(wal::Error),
     Json(serde_json::Error),
     Corrupt(String),
@@ -444,6 +544,9 @@ impl fmt::Display for Error {
             Self::DatabaseLocked => write!(f, "database is already open by another writer"),
             Self::DatabasePoisoned => {
                 f.write_str("database write state is uncertain; close and reopen it")
+            }
+            Self::UnsupportedFormat(version) => {
+                write!(f, "unsupported database format {version}")
             }
             Self::Wal(e) => write!(f, "{e}"),
             Self::Json(e) => write!(f, "JSON error: {e}"),

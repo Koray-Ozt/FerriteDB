@@ -5,9 +5,9 @@
 <p align="center"><strong>A small local JSON document/key-value database with explicit durable commits and a language-neutral sidecar.</strong></p>
 
 > [!WARNING]
-> FerriteDB is an **unaudited MVP**. Its API, protocol, and on-disk format are unstable. Do not use it for production or irreplaceable data.
+> FerriteDB is an **unaudited public beta** for Linux x86_64 and Node.js. Do not use it for production, security-critical workloads, or irreplaceable data.
 
-## MVP capabilities
+## Beta capabilities
 
 - persistent JSON key/value records and atomic multi-operation put/delete transactions;
 - checksummed WAL, committed-only recovery, explicit corruption failures, and bounded untrusted lengths;
@@ -15,10 +15,17 @@
 - local-only version 1 NDJSON protocol over Unix domain sockets;
 - direct `put`, `get`, `delete`, `list`, `verify`, `backup`, `restore`, `export`, and `import` commands;
 - dependency-light TypeScript SDK that starts and owns the Rust sidecar.
+- crash-safe manual WAL checkpointing and an explicit, backup-first alpha-to-beta migration command.
 
 ## Build and try it
 
-For a complete walkthrough—from the first CLI write through schemas, backup/restore, JSONL portability, and the TypeScript SDK—see **[Getting started with FerriteDB](docs/GETTING_STARTED.md)**.
+The easiest installation is a single command; no Rust toolchain or separate sidecar setup is required:
+
+```bash
+npm install @ferritedb/sdk@beta
+```
+
+For a complete walkthrough—from the first write through schemas, checkpoint, backup/restore, JSONL portability, and the CLI—see **[Getting started with FerriteDB](docs/GETTING_STARTED.md)**.
 
 ```bash
 cargo build -p ferrite-cli
@@ -66,7 +73,7 @@ npm run build
 ```ts
 import { FerriteDB } from "@ferritedb/sdk";
 
-const db = await FerriteDB.open("./app-db", { binary: "./target/debug/ferrite" });
+const db = await FerriteDB.open("./app-db");
 await db.put("settings/theme", { dark: true });
 console.log(await db.get("settings/theme"));
 await db.transaction([
@@ -90,9 +97,9 @@ FERRITE_BIN=../../target/debug/ferrite npm run e2e
 
 ## Limits and limitations
 
-The MVP limits keys to 4 KiB, JSON values and WAL records to about 1 MiB, transactions to 1,024 operations/8 MiB, and a WAL file to 64 MiB. There is no checkpointing, so writes eventually reach the WAL limit. The database uses an in-memory ordered map rebuilt from the WAL at startup; it is not a page store or B+ tree. An advisory file lock enforces one writer process per database. The sidecar handles at most 64 clients in connection workers with a 30-second read timeout while serializing database operations through one process-local lock.
+The beta limits keys to 4 KiB, JSON values and WAL records to about 1 MiB, transactions to 1,024 operations/8 MiB, and a WAL file to 64 MiB between manual checkpoints. The database uses an in-memory ordered map rebuilt from the WAL at startup; it is not a page store or B+ tree. An advisory file lock enforces one writer process per database. The sidecar handles at most 64 clients in connection workers with a 30-second read timeout while serializing database operations through one process-local lock.
 
-Unix sockets make the sidecar and SDK **Linux/macOS only**. There is no Windows transport, remote TCP, authentication, encryption, SQL, distributed replication, telemetry, or cloud service. Backup holds the source writer lock for the complete verified copy and therefore rejects a running writer instead of producing a concurrent snapshot. Fully written but uncommitted WAL transactions are ignored during recovery; a physically truncated WAL tail is reported as corruption and is never repaired in place. Durability has not received systematic power-loss testing or an independent security audit.
+The packaged beta supports **Linux x86_64 only**. The source can build on macOS, but macOS is not a supported beta distribution target. There is no Windows transport, remote TCP, authentication, encryption, SQL, distributed replication, telemetry, or cloud service. Backup holds the source writer lock for the complete verified copy and therefore rejects a running writer instead of producing a concurrent snapshot. Fully written but uncommitted WAL transactions are ignored during recovery; a physically truncated WAL tail is reported as corruption and is never repaired in place. Process-kill boundaries are covered by automated tests; durability has not received physical power-cut testing or an independent security audit.
 
 ## Layout
 
@@ -100,4 +107,6 @@ Unix sockets make the sidecar and SDK **Linux/macOS only**. There is no Windows 
 - `crates/ferrite-cli`: direct commands and local Unix-socket sidecar
 - `sdk/typescript`: Node.js SDK and real sidecar-to-disk e2e test
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). The intended model is source-available; until final legal text is published, no additional license grant is implied.
+Beta format 1 databases are identified by `format.json`. Future beta versions must read format 1 or provide a tested migration. Alpha databases without a manifest are not opened implicitly; use `ferrite migrate SOURCE DEST --backup BACKUP` to create an untouched backup and a separately verified beta copy. See [FORMAT.md](docs/FORMAT.md), [THREAT_MODEL.md](docs/THREAT_MODEL.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
+
+FerriteDB is licensed under [FSL-1.1-ALv2](LICENSE), which permits internal use and redistribution that does not compete with FerriteDB, and converts each release to Apache-2.0 after two years. This is not legal advice; evaluate the license for your use case.

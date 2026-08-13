@@ -1,14 +1,19 @@
 {
   "name": "@ferritedb/sdk",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.0-beta.1",
+  "description": "TypeScript SDK for the FerriteDB local-first database",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": "github:Koray-Ozt/FerriteDB",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
+  "files": ["dist/src", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "e2e": "npm run build && node --test dist/test/e2e.test.js"
   },
+  "optionalDependencies": { "@ferritedb/linux-x64": "0.1.0-beta.1" },
   "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.0" }
 }

@@ -6,6 +6,7 @@ import { lstat, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 
 export type Operation =
   | { Put: { key: string; value: unknown } }
@@ -14,10 +15,31 @@ export type Operation =
 export interface OpenOptions { binary?: string; schema?: string; socket?: string }
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
+type SocketIdentity = { dev: number; ino: number };
 
-async function removeSocket(path: string): Promise<void> {
+const require = createRequire(import.meta.url);
+
+function defaultBinary(): string {
+  if (process.platform !== "linux" || process.arch !== "x64") {
+    throw new Error(`FerriteDB does not support ${process.platform}-${process.arch} in this beta`);
+  }
   try {
-    if ((await lstat(path)).isSocket()) {
+    return require.resolve("@ferritedb/linux-x64/bin/ferrite");
+  } catch (error) {
+    throw new Error("FerriteDB Linux sidecar package is missing; reinstall @ferritedb/sdk", { cause: error });
+  }
+}
+
+async function socketIdentity(path: string): Promise<SocketIdentity> {
+  const stats = await lstat(path);
+  if (!stats.isSocket()) throw new Error(`FerriteDB socket path is not a socket: ${path}`);
+  return { dev: stats.dev, ino: stats.ino };
+}
+
+async function removeSocket(path: string, identity: SocketIdentity): Promise<void> {
+  try {
+    const current = await lstat(path);
+    if (current.isSocket() && current.dev === identity.dev && current.ino === identity.ino) {
       await rm(path);
     }
   } catch (error) {
@@ -59,7 +81,7 @@ export class FerriteDB {
   private nextId = 1;
   private buffer = "";
   private readonly pending = new Map<number, Pending>();
-  private constructor(private readonly child: ChildProcess, private readonly socket: Socket, private readonly socketPath: string) {
+  private constructor(private readonly child: ChildProcess, private readonly socket: Socket, private readonly socketPath: string, private readonly socketIdentity: SocketIdentity) {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.receive(chunk));
     socket.on("error", (error) => this.rejectAll(error));
@@ -67,7 +89,7 @@ export class FerriteDB {
   }
 
   static async open(path: string, options: OpenOptions = {}): Promise<FerriteDB> {
-    const binary = options.binary ?? process.env.FERRITE_BIN ?? "ferrite";
+    const binary = options.binary ?? process.env.FERRITE_BIN ?? defaultBinary();
     const socketPath = options.socket ?? join(tmpdir(), `ferrite-${process.pid}-${randomUUID()}.sock`);
     if (existsSync(socketPath)) {
       throw new Error(`FerriteDB socket path already exists: ${socketPath}`);
@@ -80,6 +102,7 @@ export class FerriteDB {
     child.once("error", error => { spawnError = error; });
     child.stderr?.setEncoding("utf8"); child.stderr?.on("data", chunk => { stderr += String(chunk); });
     const deadline = Date.now() + 5000;
+    let identity: SocketIdentity | undefined;
     try {
       while (!existsSync(socketPath)) {
         if (spawnError) throw new Error(`FerriteDB failed to start: ${spawnError.message}`);
@@ -87,12 +110,13 @@ export class FerriteDB {
         if (Date.now() >= deadline) throw new Error("FerriteDB sidecar startup timed out");
         await new Promise(resolve => setTimeout(resolve, 10));
       }
+      identity = await socketIdentity(socketPath);
       const socket = createConnection(socketPath);
       await once(socket, "connect");
-      return new FerriteDB(child, socket, socketPath);
+      return new FerriteDB(child, socket, socketPath, identity);
     } catch (error) {
       await terminateChild(child);
-      await removeSocket(socketPath);
+      if (identity) await removeSocket(socketPath, identity);
       throw error;
     }
   }
@@ -106,7 +130,7 @@ export class FerriteDB {
   async close(): Promise<void> {
     this.socket.end();
     await terminateChild(this.child);
-    await removeSocket(this.socketPath);
+    await removeSocket(this.socketPath, this.socketIdentity);
   }
 
   private request(method: string, fields: Record<string, unknown>): Promise<unknown> {
