@@ -29,7 +29,9 @@ jobs:
       - name: Build release packages
         run: bash scripts/build-release.sh dist
       - name: Verify tag matches package version
-        run: test "$GITHUB_REF_NAME" = "v$(node -p \"require('./sdk/typescript/package.json').version\")"
+        run: |
+          version=$(node -p "require('./sdk/typescript/package.json').version")
+          test "$GITHUB_REF_NAME" = "v$version"
       - name: Validate publish payloads
         run: |
           npm publish ./dist/ferritedb-linux-x64-*.tgz --access public --provenance --tag beta --dry-run
