@@ -4,11 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+crash-testing = ["ferrite-core/crash-testing"]
+
 [[bin]]
 name = "ferrite"
 path = "src/main.rs"
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+fs2 = "0.4"
 libc = "0.2"
 serde_json = "1"

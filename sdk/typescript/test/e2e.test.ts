@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { once } from "node:events";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -54,4 +56,42 @@ test("a pre-existing socket path is rejected without deleting it", async () => {
   );
   assert.equal(await readFile(socket, "utf8"), "owned by user");
   await rm(root, { recursive: true, force: true });
+});
+
+test("the packaged Linux sidecar is discovered without a binary option", {
+  skip: process.env.FERRITE_PACKAGED_TEST !== "1"
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "ferrite-sdk-packaged-"));
+  const previous = process.env.FERRITE_BIN;
+  delete process.env.FERRITE_BIN;
+  try {
+    const db = await FerriteDB.open(join(root, "db"));
+    await db.put("packaged", { works: true });
+    assert.deepEqual(await db.get("packaged"), { works: true });
+    await db.close();
+  } finally {
+    if (previous === undefined) delete process.env.FERRITE_BIN;
+    else process.env.FERRITE_BIN = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("close preserves a replacement socket path it does not own", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ferrite-sdk-socket-race-"));
+  const socket = join(root, "db.sock");
+  const binary = resolve(process.env.FERRITE_BIN ?? "../../target/debug/ferrite");
+  const db = await FerriteDB.open(join(root, "db"), { binary, socket });
+  await unlink(socket);
+
+  const replacement = createServer();
+  replacement.listen(socket);
+  await once(replacement, "listening");
+  try {
+    await db.close();
+    assert.equal(existsSync(socket), true);
+  } finally {
+    replacement.close();
+    await once(replacement, "close");
+    await rm(root, { recursive: true, force: true });
+  }
 });

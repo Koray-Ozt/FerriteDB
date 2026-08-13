@@ -4,16 +4,17 @@ version = 4
 
 [[package]]
 name = "ferrite-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "ferrite-core",
+ "fs2",
  "libc",
  "serde_json",
 ]
 
 [[package]]
 name = "ferrite-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "fs2",
  "libc",

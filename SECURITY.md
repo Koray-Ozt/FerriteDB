@@ -1,6 +1,6 @@
 # Security Policy
 
-FerriteDB is in early development and has not received an independent security audit. Do not use the current code to store irreplaceable or security-critical data.
+FerriteDB is a public beta and has not received an independent security audit. Do not use it to store irreplaceable or security-critical data. The current trust boundaries and non-goals are documented in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Reporting a vulnerability
 

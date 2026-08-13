@@ -40,7 +40,9 @@ impl Wal {
     }
 
     pub fn begin(&mut self, transaction_id: u64) -> Result<(), Error> {
-        self.write_record(BEGIN, transaction_id, &[])
+        self.write_record(BEGIN, transaction_id, &[])?;
+        crash_at("wal-after-begin");
+        Ok(())
     }
 
     pub fn put(&mut self, transaction_id: u64, key: &[u8], value: &[u8]) -> Result<(), Error> {
@@ -61,19 +63,25 @@ impl Wal {
         payload.extend_from_slice(&value_len.to_le_bytes());
         payload.extend_from_slice(key);
         payload.extend_from_slice(value);
-        self.write_record(PUT, transaction_id, &payload)
+        self.write_record(PUT, transaction_id, &payload)?;
+        crash_at("wal-after-write");
+        Ok(())
     }
 
     pub fn delete(&mut self, transaction_id: u64, key: &[u8]) -> Result<(), Error> {
         if key.len() > MAX_KEY_BYTES {
             return Err(Error::Limit("key exceeds 4 KiB"));
         }
-        self.write_record(DELETE, transaction_id, key)
+        self.write_record(DELETE, transaction_id, key)?;
+        crash_at("wal-after-write");
+        Ok(())
     }
 
     pub fn commit(&mut self, transaction_id: u64) -> Result<(), Error> {
         self.write_record(COMMIT, transaction_id, &[])?;
+        crash_at("wal-after-commit-record");
         self.file.sync_all()?;
+        crash_at("wal-after-sync");
         Ok(())
     }
 
@@ -116,6 +124,15 @@ impl Wal {
         self.length = next;
         Ok(())
     }
+}
+
+fn crash_at(point: &str) {
+    #[cfg(feature = "crash-testing")]
+    if std::env::var_os("FERRITE_CRASH_AT").is_some_and(|value| value == point) {
+        std::process::abort();
+    }
+    #[cfg(not(feature = "crash-testing"))]
+    let _ = point;
 }
 
 #[derive(Debug)]

@@ -3,64 +3,63 @@
 FerriteDB is a local JSON document/key-value database. A Rust process owns the database files and exposes either short-lived command-line operations or a versioned NDJSON protocol over a Unix socket. The TypeScript SDK starts and stops that sidecar for Node.js applications.
 
 > [!WARNING]
-> FerriteDB is an unaudited MVP. Its API, protocol, and on-disk format may change. Do not use it for production or irreplaceable data.
+> FerriteDB is an unaudited public beta for Linux x86_64 and Node.js. Do not use it for production, security-critical workloads, or irreplaceable data.
 
 ## What you will build
 
 This guide shows how to:
 
-1. build FerriteDB from source;
-2. create and query a local database with the CLI;
+1. install FerriteDB with npm;
+2. create and query a local database from Node.js;
 3. add a collection schema and unique constraint;
 4. use backup, restore, verify, export, and import;
 5. connect from TypeScript through the managed sidecar.
 
 ## Requirements
 
-FerriteDB currently supports Linux and macOS. Windows named-pipe support is not part of the MVP.
+The packaged beta supports Linux x86_64. Windows and macOS packages are not part of this beta.
 
 Install:
 
-- a stable Rust toolchain with Cargo;
-- Node.js 22 or newer and npm, if you want to use the TypeScript SDK;
-- Git, to clone the repository.
+- Node.js 20 or newer and npm.
 
 Check the tools:
 
 ```bash
-rustc --version
-cargo --version
 node --version
 npm --version
 ```
 
-## Build from source
+## Install
 
-The binary and SDK are not published as installable release artifacts yet. Start from a repository checkout:
-
-```bash
-git clone https://github.com/Koray-Ozt/FerriteDB.git
-cd FerriteDB
-cargo build -p ferrite-cli
-```
-
-The binary is now available at:
-
-```text
-target/debug/ferrite
-```
-
-You can optionally use a shell variable for the rest of this guide:
+Create a Node.js project and install the beta SDK. The matching Linux sidecar is installed automatically:
 
 ```bash
-FERRITE="$PWD/target/debug/ferrite"
+mkdir ferrite-example
+cd ferrite-example
+npm init -y
+npm install @ferritedb/sdk@beta
 ```
 
-Running it without arguments prints the supported command forms:
+Create `example.mjs`:
+
+```js
+import { FerriteDB } from "@ferritedb/sdk";
+
+const db = await FerriteDB.open("./app-db");
+try {
+  await db.put("settings/theme", { dark: true, accent: "blue" });
+  console.log(await db.get("settings/theme"));
+} finally {
+  await db.close();
+}
+```
 
 ```bash
-"$FERRITE"
+node example.mjs
 ```
+
+The remaining CLI sections are for contributors or manual administration. Download `ferrite-linux-x64` from the matching GitHub Release and set `FERRITE` to its path, or build from source with `cargo build -p ferrite-cli`.
 
 ## Five-minute CLI quickstart
 
@@ -225,23 +224,14 @@ Important rules:
 
 ## Use FerriteDB from TypeScript
 
-The TypeScript SDK currently lives in this repository and is marked private; it is not available from the npm registry. Build it locally:
+The SDK owns the matching sidecar process and resolves the exact-version Linux package automatically.
 
-```bash
-cd sdk/typescript
-npm ci --include=dev
-npm run build
-cd ../..
-```
-
-Create `example.mjs` in the repository root:
+Create `example.mjs`:
 
 ```js
-import { FerriteDB } from "./sdk/typescript/dist/src/index.js";
+import { FerriteDB } from "@ferritedb/sdk";
 
-const db = await FerriteDB.open("./example-db", {
-  binary: "./target/debug/ferrite"
-});
+const db = await FerriteDB.open("./example-db");
 
 try {
   await db.put("settings/theme", { dark: true });
@@ -277,7 +267,6 @@ node example.mjs
 
 ```js
 const db = await FerriteDB.open("./users-db", {
-  binary: "./target/debug/ferrite",
   schema: "./schema.json"
 });
 ```
@@ -310,7 +299,7 @@ The sidecar supports at most 64 active connection workers, applies a 30-second r
 
 ### `database is locked`
 
-Another FerriteDB process owns the database. Stop the sidecar or wait for the other direct command to finish. The MVP permits one writer process per database.
+Another FerriteDB process owns the database. Stop the sidecar or wait for the other direct command to finish. The beta permits one writer process per database.
 
 ### `socket path already exists`
 
@@ -322,7 +311,7 @@ Import and restore are no-overwrite operations. Choose a new path. FerriteDB int
 
 ### `WAL exceeds 64 MiB`
 
-The MVP has no checkpoint or compaction mechanism. Export the logical data if needed, then create a new database through import. Do not manually edit or truncate the WAL.
+Run `"$FERRITE" checkpoint "$DB"` while no sidecar owns the database. Do not manually edit or truncate the WAL.
 
 ### `corrupt WAL: truncated ...`
 
@@ -334,7 +323,7 @@ Check that the key uses `collection/id`, the document is an object, the primary-
 
 ## Limits and safety boundary
 
-The MVP currently enforces:
+The beta currently enforces:
 
 | Resource | Limit |
 | --- | ---: |
@@ -348,7 +337,7 @@ The MVP currently enforces:
 | Active sidecar workers | 64 |
 | Sidecar read timeout | 30 seconds |
 
-FerriteDB is local-only and opens no TCP listener. It does not provide authentication, encryption at rest, SQL, replication, cloud backup, telemetry, automatic updates, or Windows transport. Recovery reads the bounded WAL into memory; it is not streaming. Systematic power-loss testing and an independent security audit have not been completed.
+FerriteDB is local-only and opens no TCP listener. It does not provide authentication, encryption at rest, SQL, replication, cloud backup, telemetry, automatic updates, or Windows transport. Recovery reads the bounded WAL into memory; it is not streaming. Process-kill boundaries are tested, but physical power-cut testing and an independent security audit have not been completed.
 
 ## Verify your checkout
 

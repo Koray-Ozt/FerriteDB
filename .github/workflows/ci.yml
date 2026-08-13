@@ -24,14 +24,20 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Test
-        run: cargo test --workspace --all-targets
+      - name: Tests
+        run: cargo test --workspace --all-targets --locked
+      - name: Crash injection tests
+        run: cargo test -p ferrite-cli --features crash-testing --test crash_recovery --locked
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Formatting
         run: cargo fmt --all --check
+
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Dependency audit
+        run: cargo audit
 
   typescript:
     name: TypeScript SDK and e2e
@@ -57,3 +63,16 @@ jobs:
         working-directory: sdk/typescript
         env:
           FERRITE_BIN: ../../target/debug/ferrite
+
+  release-acceptance:
+    name: Release acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: bash scripts/release-acceptance.sh

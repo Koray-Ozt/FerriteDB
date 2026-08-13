@@ -1,9 +1,13 @@
 use ferrite_core::{Database, Operation};
+use fs2::FileExt;
 use serde_json::{Value, json};
 use std::env;
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -64,6 +68,12 @@ fn run() -> Result<(), AnyError> {
             println!("ok");
             Ok(())
         }
+        "checkpoint" => {
+            let mut db = open_arg(&args)?;
+            db.checkpoint()?;
+            println!("ok");
+            Ok(())
+        }
         "backup" => copy_database(
             Path::new(required(&args, 1)?),
             Path::new(required(&args, 2)?),
@@ -80,12 +90,17 @@ fn run() -> Result<(), AnyError> {
             Path::new(required(&args, 1)?),
             Path::new(required(&args, 2)?),
         ),
+        "migrate" => migrate(
+            Path::new(required(&args, 1)?),
+            Path::new(required(&args, 2)?),
+            Path::new(option(&args, "--backup").ok_or("migrate requires --backup PATH")?),
+        ),
         _ => Err(usage().into()),
     }
 }
 
 fn usage() -> &'static str {
-    "usage: ferrite serve DB --socket PATH [--schema FILE] | put DB KEY JSON | get DB KEY | delete DB KEY | list DB [PREFIX] | verify DB | backup DB DEST | restore BACKUP DEST | export DB FILE | import DB FILE"
+    "usage: ferrite serve DB --socket PATH [--schema FILE] | put DB KEY JSON | get DB KEY | delete DB KEY | list DB [PREFIX] | verify DB | checkpoint DB | backup DB DEST | restore BACKUP DEST | export DB FILE | import DB FILE | migrate SOURCE DEST --backup PATH"
 }
 fn required(args: &[String], index: usize) -> Result<&str, AnyError> {
     args.get(index)
@@ -282,22 +297,196 @@ fn copy_database(source: &Path, destination: &Path) -> Result<(), AnyError> {
 }
 
 fn copy_database_into(source: &Path, destination: &Path) -> Result<(), AnyError> {
-    for name in ["data.wal", "schema.json"] {
+    for name in ["format.json", "data.wal", "schema.json"] {
         let source_file = source.join(name);
-        if source_file.exists() {
-            let destination_file = destination.join(name);
-            let mut input = File::open(source_file)?;
-            let mut output = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(destination_file)?;
-            io::copy(&mut input, &mut output)?;
-            output.sync_all()?;
+        match fs::symlink_metadata(&source_file) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(format!("database metadata {name} is not a regular file").into());
+                }
+                let destination_file = destination.join(name);
+                let mut input = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(source_file)?;
+                if !input.metadata()?.is_file() {
+                    return Err(format!("database metadata {name} is not a regular file").into());
+                }
+                let mut output = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(destination_file)?;
+                io::copy(&mut input, &mut output)?;
+                output.sync_all()?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
     File::open(destination)?.sync_all()?;
     Ok(())
 }
+
+fn migrate(source: &Path, destination: &Path, backup: &Path) -> Result<(), AnyError> {
+    if !source.is_dir() || !source.join("data.wal").is_file() {
+        return Err("migration source database does not exist".into());
+    }
+    if source.join("format.json").exists() {
+        return Err("migration source is already versioned".into());
+    }
+
+    let source_canonical = fs::canonicalize(source)?;
+    let destination_output = AnchoredOutput::open(destination)?;
+    let backup_output = AnchoredOutput::open(backup)?;
+    let destination_resolved = destination_output.resolved_path()?;
+    let backup_resolved = backup_output.resolved_path()?;
+    let source_parent = source_canonical
+        .parent()
+        .ok_or("migration source must have a parent directory")?;
+    if destination_output.resolved_parent()? != source_parent
+        || backup_output.resolved_parent()? != source_parent
+    {
+        return Err("migration outputs must be siblings of the source database".into());
+    }
+    if destination_resolved.starts_with(&source_canonical)
+        || backup_resolved.starts_with(&source_canonical)
+    {
+        return Err("migration outputs must be outside the source database".into());
+    }
+    if destination_resolved == backup_resolved {
+        return Err("migration destination and backup must be different paths".into());
+    }
+
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(source.join(".ferrite.lock"))?;
+    lock.try_lock_exclusive()?;
+
+    let backup_staging = backup_output.create_staging_dir()?;
+    copy_database_into(source, &backup_staging)?;
+    backup_output.publish(&backup_staging)?;
+
+    let wal = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(source.join("data.wal"))?;
+    if !wal.metadata()?.is_file() {
+        return Err("migration WAL is not a regular file".into());
+    }
+    drop(wal);
+    ferrite_core::wal::Recovery::read(source.join("data.wal"))?;
+    let staging = destination_output.create_staging_dir()?;
+    copy_database_into(source, &staging)?;
+    write_synced_file(
+        &staging.join("format.json"),
+        br#"{
+  "format": 1
+}"#,
+    )?;
+    File::open(&staging)?.sync_all()?;
+    Database::verify(&staging)?;
+    destination_output.publish(&staging)
+}
+
+fn write_synced_file(path: &Path, bytes: &[u8]) -> Result<(), AnyError> {
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+struct AnchoredOutput {
+    parent: File,
+    destination: CString,
+}
+
+impl AnchoredOutput {
+    fn open(path: &Path) -> Result<Self, AnyError> {
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(path.parent().unwrap_or_else(|| Path::new(".")))?;
+        let destination = CString::new(
+            path.file_name()
+                .ok_or("output path must have a file name")?
+                .as_bytes(),
+        )?;
+        Ok(Self {
+            parent,
+            destination,
+        })
+    }
+
+    fn resolved_path(&self) -> Result<PathBuf, AnyError> {
+        Ok(self
+            .resolved_parent()?
+            .join(std::ffi::OsStr::from_bytes(self.destination.as_bytes())))
+    }
+
+    fn resolved_parent(&self) -> Result<PathBuf, AnyError> {
+        Ok(fs::canonicalize(self.parent_path())?)
+    }
+
+    fn create_staging_dir(&self) -> Result<PathBuf, AnyError> {
+        for _ in 0..100 {
+            let id = STAGING_ID.fetch_add(1, Ordering::Relaxed);
+            let name = CString::new(format!(
+                ".{}.ferrite-staging-{}-{id}",
+                self.destination.to_string_lossy(),
+                std::process::id()
+            ))?;
+            // SAFETY: `name` is a live CString and `parent` stays open for this call.
+            let result = unsafe { libc::mkdirat(self.parent.as_raw_fd(), name.as_ptr(), 0o700) };
+            if result == 0 {
+                return Ok(self
+                    .parent_path()
+                    .join(std::ffi::OsStr::from_bytes(name.as_bytes())));
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error.into());
+            }
+        }
+        Err("could not allocate a staging directory".into())
+    }
+
+    fn publish(&self, staging: &Path) -> Result<(), AnyError> {
+        let staging = CString::new(
+            staging
+                .file_name()
+                .ok_or("staging path must have a file name")?
+                .as_bytes(),
+        )?;
+        // SAFETY: both names are live CStrings and `parent` stays open for this call.
+        let result = unsafe {
+            libc::renameat2(
+                self.parent.as_raw_fd(),
+                staging.as_ptr(),
+                self.parent.as_raw_fd(),
+                self.destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        self.parent.sync_all()?;
+        Ok(())
+    }
+
+    fn parent_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.parent.as_raw_fd()))
+    }
+}
+
 fn export(db_path: &Path, output: &Path) -> Result<(), AnyError> {
     let database = fs::canonicalize(db_path)?;
     let output_parent = fs::canonicalize(output.parent().unwrap_or_else(|| Path::new(".")))?;
@@ -472,4 +661,37 @@ fn import_new(db_path: &Path, input: &Path) -> Result<(), AnyError> {
         db.transaction(&operations)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn anchored_output_ignores_parent_symlink_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "ferrite-anchored-output-{}-{}",
+            std::process::id(),
+            STAGING_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let safe = root.join("safe");
+        let source = root.join("source");
+        let link = root.join("output-parent");
+        fs::create_dir_all(&safe).unwrap();
+        fs::create_dir_all(&source).unwrap();
+        symlink(&safe, &link).unwrap();
+
+        let output = AnchoredOutput::open(&link.join("migrated")).unwrap();
+        fs::remove_file(&link).unwrap();
+        symlink(&source, &link).unwrap();
+
+        let staging = output.create_staging_dir().unwrap();
+        fs::write(staging.join("marker"), b"safe").unwrap();
+        output.publish(&staging).unwrap();
+
+        assert_eq!(fs::read(safe.join("migrated/marker")).unwrap(), b"safe");
+        assert!(!source.join("migrated").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
