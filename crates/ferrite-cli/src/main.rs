@@ -245,6 +245,11 @@ fn copy_database_into(source: &Path, destination: &Path) -> Result<(), AnyError>
     Ok(())
 }
 fn export(db_path: &Path, output: &Path) -> Result<(), AnyError> {
+    let database = fs::canonicalize(db_path)?;
+    let output_parent = fs::canonicalize(output.parent().unwrap_or_else(|| Path::new(".")))?;
+    if output_parent.starts_with(&database) {
+        return Err("export destination must be outside the source database".into());
+    }
     let db = Database::open_existing(db_path)?;
     let (staging, mut file) = create_staging_file(output)?;
     export_into(&db, &mut file)?;

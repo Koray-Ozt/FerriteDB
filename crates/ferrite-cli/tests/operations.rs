@@ -185,6 +185,31 @@ fn jsonl_round_trip_preserves_schema_constraints() {
 }
 
 #[test]
+fn export_does_not_write_inside_the_source_database() {
+    let db = temp_path("reserved-export-db");
+    assert!(
+        ferrite(&["put", db.to_str().unwrap(), "users/1", r#"{"name":"Ada"}"#])
+            .status
+            .success()
+    );
+
+    let schema_path = db.join("schema.json");
+    assert!(
+        !ferrite(&[
+            "export",
+            db.to_str().unwrap(),
+            schema_path.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    assert!(!schema_path.exists());
+    assert!(ferrite(&["verify", db.to_str().unwrap()]).status.success());
+
+    let _ = fs::remove_dir_all(db);
+}
+
+#[test]
 fn backup_restore_and_jsonl_round_trip_without_overwriting() {
     let db = temp_path("db");
     let backup = temp_path("backup");

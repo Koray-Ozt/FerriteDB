@@ -5,7 +5,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io;
+use std::io::{self, Read};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub use wal::{MAX_KEY_BYTES, MAX_TRANSACTION_OPERATIONS, MAX_VALUE_BYTES, MAX_WAL_BYTES};
@@ -78,11 +79,8 @@ impl Database {
         })?;
         let schema_path = path.join(SCHEMA_FILE);
         let mut persist_schema = false;
-        let schema = if schema_path.exists() {
-            let bytes = fs::read(&schema_path)?;
-            if bytes.len() > MAX_VALUE_BYTES {
-                return Err(Error::Limit("schema exceeds 1 MiB"));
-            }
+        let schema = if schema_entry_exists(&schema_path)? {
+            let bytes = read_schema(&schema_path)?;
             let existing: Schema = serde_json::from_slice(&bytes)
                 .map_err(|e| Error::Corrupt(format!("invalid schema: {e}")))?;
             if let Some(requested) = requested_schema {
@@ -391,6 +389,39 @@ fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 fn sync_dir(path: &Path) -> Result<(), Error> {
     File::open(path)?.sync_all()?;
     Ok(())
+}
+
+fn read_schema(path: &Path) -> Result<Vec<u8>, Error> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| Error::Corrupt(format!("cannot safely open schema metadata: {error}")))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(Error::Corrupt(
+            "schema metadata is not a regular file".into(),
+        ));
+    }
+    if metadata.len() > MAX_VALUE_BYTES as u64 {
+        return Err(Error::Limit("schema exceeds 1 MiB"));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.by_ref()
+        .take((MAX_VALUE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_VALUE_BYTES {
+        return Err(Error::Limit("schema exceeds 1 MiB"));
+    }
+    Ok(bytes)
+}
+
+fn schema_entry_exists(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::Io(error)),
+    }
 }
 use std::fs::File;
 

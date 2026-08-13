@@ -1,5 +1,6 @@
 use ferrite_core::{Database, Error, Operation};
 use serde_json::json;
+use std::os::unix::fs::symlink;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("ferrite-db-{name}-{}", std::process::id()));
@@ -95,6 +96,64 @@ fn transaction_id_exhaustion_does_not_install_schema() {
     };
     assert!(matches!(error, Error::Limit("transaction id exhausted")));
     assert!(!path.join("schema.json").exists());
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn non_regular_schema_metadata_is_rejected_as_corrupt() {
+    let path = temp_dir("non-regular-schema");
+    {
+        let db = Database::open(&path).unwrap();
+        drop(db);
+    }
+    std::fs::create_dir(path.join("schema.json")).unwrap();
+
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("database with non-regular schema unexpectedly opened"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Corrupt(_)));
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn dangling_schema_symlink_is_rejected_as_corrupt() {
+    let path = temp_dir("dangling-schema-symlink");
+    {
+        let db = Database::open(&path).unwrap();
+        drop(db);
+    }
+    symlink("missing-schema", path.join("schema.json")).unwrap();
+
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("database with dangling schema symlink unexpectedly opened"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Corrupt(_)));
+
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn oversized_schema_metadata_is_rejected() {
+    let path = temp_dir("oversized-schema");
+    {
+        let db = Database::open(&path).unwrap();
+        drop(db);
+    }
+    let schema = std::fs::File::create(path.join("schema.json")).unwrap();
+    schema
+        .set_len((ferrite_core::MAX_VALUE_BYTES + 1) as u64)
+        .unwrap();
+    drop(schema);
+
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("database with oversized schema unexpectedly opened"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Limit("schema exceeds 1 MiB")));
 
     std::fs::remove_dir_all(path).unwrap();
 }
