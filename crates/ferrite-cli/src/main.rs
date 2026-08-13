@@ -6,10 +6,12 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CONNECTION_WORKERS: usize = 64;
 static STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 type AnyError = Box<dyn std::error::Error>;
@@ -105,10 +107,7 @@ fn serve(db_path: &Path, socket: &Path, schema_path: Option<&Path>) -> Result<()
         return Err("socket path already exists".into());
     }
     let database = if let Some(path) = schema_path {
-        let bytes = fs::read(path)?;
-        if bytes.len() > ferrite_core::MAX_VALUE_BYTES {
-            return Err("schema exceeds 1 MiB".into());
-        }
+        let bytes = read_schema_input(path)?;
         Database::open_with_schema(db_path, &serde_json::from_slice(&bytes)?)?
     } else {
         Database::open(db_path)?
@@ -116,11 +115,27 @@ fn serve(db_path: &Path, socket: &Path, schema_path: Option<&Path>) -> Result<()
     let listener = UnixListener::bind(socket)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let database = Arc::new(Mutex::new(database));
+    let active_workers = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                if let Err(e) = handle(stream, &database) {
-                    eprintln!("connection: {e}");
+                if active_workers
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                        (active < MAX_CONNECTION_WORKERS).then_some(active + 1)
+                    })
+                    .is_err()
+                {
+                    continue;
+                }
+                let database = Arc::clone(&database);
+                let worker = ConnectionWorker::new(Arc::clone(&active_workers));
+                if let Err(error) = std::thread::Builder::new().spawn(move || {
+                    let _worker = worker;
+                    if let Err(e) = handle(stream, &database) {
+                        eprintln!("connection: {e}");
+                    }
+                }) {
+                    eprintln!("connection worker: {error}");
                 }
             }
             Err(e) => eprintln!("accept: {e}"),
@@ -130,7 +145,46 @@ fn serve(db_path: &Path, socket: &Path, schema_path: Option<&Path>) -> Result<()
     Ok(())
 }
 
+struct ConnectionWorker {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionWorker {
+    fn new(active: Arc<AtomicUsize>) -> Self {
+        Self { active }
+    }
+}
+
+impl Drop for ConnectionWorker {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn read_schema_input(path: &Path) -> Result<Vec<u8>, AnyError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err("schema must be a regular file".into());
+    }
+    if metadata.len() > ferrite_core::MAX_VALUE_BYTES as u64 {
+        return Err("schema exceeds 1 MiB".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    Read::by_ref(&mut file)
+        .take((ferrite_core::MAX_VALUE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > ferrite_core::MAX_VALUE_BYTES {
+        return Err("schema exceeds 1 MiB".into());
+    }
+    Ok(bytes)
+}
+
 fn handle(mut stream: UnixStream, database: &Arc<Mutex<Database>>) -> Result<(), AnyError> {
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     loop {
         let mut line = String::new();

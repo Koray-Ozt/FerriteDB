@@ -88,7 +88,7 @@ FERRITE_BIN=../../target/debug/ferrite npm run e2e
 
 ## Limits and limitations
 
-The MVP limits keys to 4 KiB, JSON values and WAL records to about 1 MiB, transactions to 1,024 operations/8 MiB, and a WAL file to 64 MiB. There is no checkpointing, so writes eventually reach the WAL limit. The database uses an in-memory ordered map rebuilt from the WAL at startup; it is not a page store or B+ tree. An advisory file lock enforces one writer process per database, and one sidecar process serializes its client requests.
+The MVP limits keys to 4 KiB, JSON values and WAL records to about 1 MiB, transactions to 1,024 operations/8 MiB, and a WAL file to 64 MiB. There is no checkpointing, so writes eventually reach the WAL limit. The database uses an in-memory ordered map rebuilt from the WAL at startup; it is not a page store or B+ tree. An advisory file lock enforces one writer process per database. The sidecar handles at most 64 clients in connection workers with a 30-second read timeout while serializing database operations through one process-local lock.
 
 Unix sockets make the sidecar and SDK **Linux/macOS only**. There is no Windows transport, remote TCP, authentication, encryption, SQL, distributed replication, telemetry, or cloud service. Backup holds the source writer lock for the complete verified copy and therefore rejects a running writer instead of producing a concurrent snapshot. Fully written but uncommitted WAL transactions are ignored during recovery; a physically truncated WAL tail is reported as corruption and is never repaired in place. Durability has not received systematic power-loss testing or an independent security audit.
 

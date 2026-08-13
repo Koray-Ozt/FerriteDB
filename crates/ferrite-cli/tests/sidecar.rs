@@ -146,3 +146,125 @@ fn sidecar_preserves_a_pre_existing_socket_path() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn idle_client_does_not_block_other_clients() {
+    let root = std::env::temp_dir().join(format!("ferrite-cli-idle-{}", std::process::id()));
+    let socket = root.with_extension("sock");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&socket);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ferrite"))
+        .args([
+            "serve",
+            root.to_str().unwrap(),
+            "--socket",
+            socket.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let idle = UnixStream::connect(&socket).unwrap();
+    let mut healthy = UnixStream::connect(&socket).unwrap();
+    healthy
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    writeln!(healthy, "{}", json!({"version":1,"id":9,"method":"list"})).unwrap();
+    let mut line = String::new();
+    let result = BufReader::new(healthy).read_line(&mut line);
+
+    drop(idle);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_file(socket);
+
+    result.expect("idle client blocked a healthy client");
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
+}
+
+#[test]
+fn serve_rejects_non_regular_schema_input() {
+    let root =
+        std::env::temp_dir().join(format!("ferrite-cli-schema-input-{}", std::process::id()));
+    let socket = root.with_extension("sock");
+    let schema = root.with_extension("schema-dir");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_dir_all(&schema);
+    std::fs::create_dir(&schema).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ferrite"))
+        .args([
+            "serve",
+            root.to_str().unwrap(),
+            "--socket",
+            socket.to_str().unwrap(),
+            "--schema",
+            schema.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::remove_dir_all(&schema);
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("schema must be a regular file"));
+}
+
+#[test]
+fn sidecar_bounds_idle_connection_workers() {
+    let root =
+        std::env::temp_dir().join(format!("ferrite-cli-worker-limit-{}", std::process::id()));
+    let socket = root.with_extension("sock");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&socket);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ferrite"))
+        .args([
+            "serve",
+            root.to_str().unwrap(),
+            "--socket",
+            socket.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut idle = Vec::new();
+    for _ in 0..64 {
+        idle.push(UnixStream::connect(&socket).unwrap());
+    }
+    let mut excess = UnixStream::connect(&socket).unwrap();
+    excess
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    writeln!(excess, "{}", json!({"version":1,"id":10,"method":"list"})).unwrap();
+    let mut line = String::new();
+    let result = BufReader::new(excess).read_line(&mut line);
+
+    drop(idle);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_file(socket);
+
+    match result {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+            ) => {}
+        other => panic!("excess connection was not rejected: {other:?}, response={line:?}"),
+    }
+}
