@@ -53,3 +53,55 @@ fn recovery_rejects_a_corrupted_record() {
 
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn recovery_tracks_uncommitted_ids_without_reusing_them() {
+    let path = temp_path("uncommitted-tail");
+    let _ = std::fs::remove_file(&path);
+
+    {
+        let mut wal = Wal::create(&path).unwrap();
+        wal.begin(1).unwrap();
+        wal.put(1, b"stable", b"value").unwrap();
+        wal.commit(1).unwrap();
+        wal.begin(2).unwrap();
+        wal.put(2, b"discard", b"me").unwrap();
+    }
+
+    {
+        let mut wal = Wal::open(&path).unwrap();
+        wal.begin(3).unwrap();
+        wal.put(3, b"future", b"commit").unwrap();
+        wal.commit(3).unwrap();
+    }
+
+    let recovery = Recovery::read(&path).unwrap();
+    assert_eq!(recovery.max_transaction_id(), Some(3));
+    assert_eq!(recovery.committed().len(), 2);
+    assert_eq!(recovery.committed()[1].writes()[0].key(), b"future");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn open_rejects_an_incomplete_tail_without_modifying_it() {
+    let path = temp_path("torn-tail");
+    let _ = std::fs::remove_file(&path);
+
+    {
+        let mut wal = Wal::create(&path).unwrap();
+        wal.begin(1).unwrap();
+        wal.put(1, b"stable", b"value").unwrap();
+        wal.commit(1).unwrap();
+    }
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&[10, 0, 0])
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    assert!(Wal::open(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::remove_file(path).unwrap();
+}

@@ -32,3 +32,28 @@ jobs:
 
       - name: Formatting
         run: cargo fmt --all --check
+
+  typescript:
+    name: TypeScript SDK and e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: cargo build -p ferrite-cli
+      - run: npm ci --include=dev
+        working-directory: sdk/typescript
+      - run: npm run build
+        working-directory: sdk/typescript
+      - run: npm test
+        working-directory: sdk/typescript
+        env:
+          FERRITE_BIN: ../../target/debug/ferrite
+      - run: npm run e2e
+        working-directory: sdk/typescript
+        env:
+          FERRITE_BIN: ../../target/debug/ferrite
