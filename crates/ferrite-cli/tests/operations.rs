@@ -1,6 +1,9 @@
 use serde_json::Value;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn temp_path(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("ferrite-ops-{name}-{}", std::process::id()));
@@ -62,6 +65,71 @@ fn failed_import_removes_its_partial_destination() {
     );
     assert!(!imported.exists());
 
+    let _ = fs::remove_file(input);
+}
+
+#[test]
+fn failed_import_does_not_delete_a_replacement_destination() {
+    let imported = temp_path("replaced-import");
+    let input = temp_path("replacement-race.jsonl");
+    let marker = imported.join("do-not-delete");
+    let mut contents = String::new();
+    for index in 0..20_000 {
+        contents.push_str(&format!("{{\"key\":\"key-{index}\",\"value\":{index}}}\n"));
+    }
+    contents.push_str("{not-json}\n");
+    fs::write(&input, contents).unwrap();
+
+    let child = Command::new(env!("CARGO_BIN_EXE_ferrite"))
+        .args([
+            "import",
+            imported.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ])
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let parent = imported.parent().unwrap().to_path_buf();
+    let staging_prefix = format!(
+        ".{}.ferrite-staging-",
+        imported.file_name().unwrap().to_str().unwrap()
+    );
+    let staging = loop {
+        if let Some(path) = fs::read_dir(&parent).unwrap().find_map(|entry| {
+            let entry = entry.unwrap();
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&staging_prefix)
+                .then(|| entry.path())
+        }) {
+            break path;
+        }
+        assert!(Instant::now() < deadline, "import did not create staging");
+        thread::yield_now();
+    };
+    assert_eq!(
+        fs::metadata(staging).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    fs::create_dir(&imported).unwrap();
+    fs::write(&marker, b"owned by another process").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&marker).unwrap(), b"owned by another process");
+
+    let _ = fs::remove_dir_all(imported);
+    for entry in fs::read_dir(parent).unwrap() {
+        let entry = entry.unwrap();
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&staging_prefix)
+        {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
     let _ = fs::remove_file(input);
 }
 
@@ -134,6 +202,10 @@ fn backup_restore_and_jsonl_round_trip_without_overwriting() {
             .status
             .success()
     );
+    assert_eq!(
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
     assert!(
         ferrite(&[
             "restore",
@@ -155,6 +227,10 @@ fn backup_restore_and_jsonl_round_trip_without_overwriting() {
         ferrite(&["export", db.to_str().unwrap(), export.to_str().unwrap()])
             .status
             .success()
+    );
+    assert_eq!(
+        fs::metadata(&export).unwrap().permissions().mode() & 0o777,
+        0o600
     );
     assert!(
         ferrite(&[

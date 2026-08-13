@@ -3,12 +3,14 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+static STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 type AnyError = Box<dyn std::error::Error>;
 
@@ -217,14 +219,12 @@ fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, AnyError> {
 fn copy_database(source: &Path, destination: &Path) -> Result<(), AnyError> {
     // Keep the source's exclusive writer lock for the entire copy.
     let source_database = Database::open_existing(source)?;
-    fs::create_dir(destination)?;
-    let result = copy_database_into(source, destination)
-        .and_then(|()| Database::verify(destination).map_err(Into::into));
-    if result.is_err() {
-        fs::remove_dir_all(destination)?;
-    }
+    let staging = create_staging_dir(destination)?;
+    copy_database_into(source, &staging)?;
+    Database::verify(&staging)?;
+    publish_no_replace(&staging, destination)?;
     drop(source_database);
-    result
+    Ok(())
 }
 
 fn copy_database_into(source: &Path, destination: &Path) -> Result<(), AnyError> {
@@ -246,30 +246,124 @@ fn copy_database_into(source: &Path, destination: &Path) -> Result<(), AnyError>
 }
 fn export(db_path: &Path, output: &Path) -> Result<(), AnyError> {
     let db = Database::open_existing(db_path)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(output)?;
+    let (staging, mut file) = create_staging_file(output)?;
+    export_into(&db, &mut file)?;
+    file.sync_all()?;
+    drop(file);
+    publish_no_replace(&staging, output)
+}
+
+fn export_into(db: &Database, file: &mut File) -> Result<(), AnyError> {
     if let Some(schema) = db.schema_json()? {
-        serde_json::to_writer(&mut file, &json!({"$ferrite":"schema","value":schema}))?;
+        serde_json::to_writer(&mut *file, &json!({"$ferrite":"schema","value":schema}))?;
         file.write_all(b"\n")?;
     }
     for (key, value) in db.list(None)? {
-        serde_json::to_writer(&mut file, &json!({"key":key,"value":value}))?;
+        serde_json::to_writer(&mut *file, &json!({"key":key,"value":value}))?;
         file.write_all(b"\n")?;
     }
-    file.sync_all()?;
     Ok(())
 }
 fn import(db_path: &Path, input: &Path) -> Result<(), AnyError> {
     if db_path.exists() {
         return Err("import destination already exists".into());
     }
-    let result = import_new(db_path, input);
-    if result.is_err() && db_path.exists() {
-        fs::remove_dir_all(db_path)?;
+    let staging = create_staging_dir(db_path)?;
+    import_new(&staging, input)?;
+    publish_no_replace(&staging, db_path)
+}
+
+fn create_staging_dir(destination: &Path) -> Result<PathBuf, AnyError> {
+    let staging = allocate_staging_path(destination)?;
+    fs::DirBuilder::new().mode(0o700).create(&staging)?;
+    Ok(staging)
+}
+
+fn create_staging_file(destination: &Path) -> Result<(PathBuf, File), AnyError> {
+    let staging = allocate_staging_path(destination)?;
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&staging)?;
+    Ok((staging, file))
+}
+
+fn allocate_staging_path(destination: &Path) -> Result<PathBuf, AnyError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("destination must have a UTF-8 file name")?;
+    for _ in 0..100 {
+        let id = STAGING_ID.fetch_add(1, Ordering::Relaxed);
+        let staging = parent.join(format!(
+            ".{name}.ferrite-staging-{}-{id}",
+            std::process::id()
+        ));
+        if !staging.exists() {
+            return Ok(staging);
+        }
     }
-    result
+    Err("could not allocate a staging directory".into())
+}
+
+fn publish_no_replace(staging: &Path, destination: &Path) -> Result<(), AnyError> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    if staging.parent().unwrap_or_else(|| Path::new(".")) != parent {
+        return Err("staging and destination must share a parent directory".into());
+    }
+    let parent = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(parent)?;
+    let staging = CString::new(
+        staging
+            .file_name()
+            .ok_or("staging path must have a file name")?
+            .as_bytes(),
+    )?;
+    let destination = CString::new(
+        destination
+            .file_name()
+            .ok_or("destination must have a file name")?
+            .as_bytes(),
+    )?;
+    let parent_fd = parent.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    // SAFETY: both pointers come from live CStrings and remain valid for the syscall.
+    let result = unsafe {
+        libc::renameat2(
+            parent_fd,
+            staging.as_ptr(),
+            parent_fd,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    // SAFETY: both pointers come from live CStrings and remain valid for the syscall.
+    let result = unsafe {
+        libc::renameatx_np(
+            parent_fd,
+            staging.as_ptr(),
+            parent_fd,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err("atomic no-replace publish is unsupported on this platform".into());
+    if result == 0 {
+        parent.sync_all()?;
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error().into())
+    }
 }
 
 fn import_new(db_path: &Path, input: &Path) -> Result<(), AnyError> {

@@ -28,7 +28,7 @@ DB=$(mktemp -d)/example
 ./target/debug/ferrite export "$DB" export.jsonl
 ```
 
-Commands never overwrite backup, restore, export, or import destinations. A database directory is created if absent. Commits and newly created database metadata are fsynced before success. JSONL exports include stored schema metadata as the first line, and import restores it before applying records so primary-key and unique constraints survive a round trip.
+Commands never overwrite backup, restore, export, or import destinations. Backup, restore, export, and import are built in owner-only hidden sibling staging paths and published with an atomic no-replace rename only after verification/sync succeeds. A crash or validation failure can leave a hidden `.ferrite-staging-*` artifact for manual inspection, but the requested destination is never exposed as complete and cleanup never recursively deletes a path that another process may have replaced. A database directory is created if absent. Commits and newly created database metadata are fsynced before success. JSONL exports include stored schema metadata as the first line, and import restores it before applying records so primary-key and unique constraints survive a round trip.
 
 A schema is JSON:
 
