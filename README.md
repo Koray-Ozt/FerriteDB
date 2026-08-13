@@ -18,6 +18,8 @@
 
 ## Build and try it
 
+For a complete walkthrough—from the first CLI write through schemas, backup/restore, JSONL portability, and the TypeScript SDK—see **[Getting started with FerriteDB](docs/GETTING_STARTED.md)**.
+
 ```bash
 cargo build -p ferrite-cli
 DB=$(mktemp -d)/example
