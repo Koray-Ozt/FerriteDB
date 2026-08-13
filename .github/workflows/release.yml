@@ -34,9 +34,33 @@ jobs:
         run: |
           npm publish ./dist/ferritedb-linux-x64-*.tgz --access public --provenance --tag beta --dry-run
           npm publish ./dist/ferritedb-sdk-*.tgz --access public --provenance --tag beta --dry-run
+      - name: Check existing platform package
+        id: platform
+        run: |
+          package=./dist/ferritedb-linux-x64-*.tgz
+          version=$(node -p "require('./packages/linux-x64/package.json').version")
+          if remote=$(npm view "@ferritedb/linux-x64@$version" dist.shasum); then
+            test "$remote" = "$(sha1sum $package | cut -d' ' -f1)"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish platform package
+        if: steps.platform.outputs.publish == 'true'
         run: npm publish ./dist/ferritedb-linux-x64-*.tgz --access public --provenance --tag beta
+      - name: Check existing SDK package
+        id: sdk
+        run: |
+          package=./dist/ferritedb-sdk-*.tgz
+          version=$(node -p "require('./sdk/typescript/package.json').version")
+          if remote=$(npm view "@ferritedb/sdk@$version" dist.shasum); then
+            test "$remote" = "$(sha1sum $package | cut -d' ' -f1)"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish SDK package
+        if: steps.sdk.outputs.publish == 'true'
         run: npm publish ./dist/ferritedb-sdk-*.tgz --access public --provenance --tag beta
       - name: Create GitHub release
         env:
