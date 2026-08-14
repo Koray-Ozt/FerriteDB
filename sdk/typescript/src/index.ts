@@ -7,6 +7,13 @@ import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import {
+  validateNegotiation,
+  type ProtocolNegotiation,
+  type ProtocolOffer
+} from "./protocol.js";
+
+export type { ProtocolNegotiation } from "./protocol.js";
 
 export type Operation =
   | { Put: { key: string; value: unknown } }
@@ -16,6 +23,15 @@ export interface OpenOptions { binary?: string; schema?: string; socket?: string
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
 type SocketIdentity = { dev: number; ino: number };
+
+const PROTOCOL_OFFER: ProtocolOffer = {
+  protocol: { min: 1, max: 1 },
+  compression: ["none"],
+  capabilities: {
+    required: ["kv", "transactions"],
+    optional: ["prefix-list"]
+  }
+};
 
 const require = createRequire(import.meta.url);
 
@@ -81,6 +97,7 @@ export class FerriteDB {
   private nextId = 1;
   private buffer = "";
   private readonly pending = new Map<number, Pending>();
+  private negotiation?: ProtocolNegotiation;
   private constructor(private readonly child: ChildProcess, private readonly socket: Socket, private readonly socketPath: string, private readonly socketIdentity: SocketIdentity) {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.receive(chunk));
@@ -113,7 +130,9 @@ export class FerriteDB {
       identity = await socketIdentity(socketPath);
       const socket = createConnection(socketPath);
       await once(socket, "connect");
-      return new FerriteDB(child, socket, socketPath, identity);
+      const database = new FerriteDB(child, socket, socketPath, identity);
+      await database.negotiate();
+      return database;
     } catch (error) {
       await terminateChild(child);
       if (identity) await removeSocket(socketPath, identity);
@@ -126,6 +145,10 @@ export class FerriteDB {
   delete(key: string): Promise<void> { return this.request("delete", { key }) as Promise<void>; }
   list<T = unknown>(prefix?: string): Promise<Array<[string, T]>> { return this.request("list", prefix === undefined ? {} : { prefix }) as Promise<Array<[string, T]>>; }
   transaction(operations: Operation[]): Promise<void> { return this.request("transaction", { operations }) as Promise<void>; }
+  get protocol(): ProtocolNegotiation {
+    if (!this.negotiation) throw new Error("FerriteDB protocol handshake is incomplete");
+    return this.negotiation;
+  }
 
   async close(): Promise<void> {
     this.socket.end();
@@ -141,6 +164,11 @@ export class FerriteDB {
         if (error) { this.pending.delete(id); reject(error); }
       });
     });
+  }
+
+  private async negotiate(): Promise<void> {
+    const result = await this.request("hello", { ...PROTOCOL_OFFER });
+    this.negotiation = validateNegotiation(result, PROTOCOL_OFFER);
   }
 
   private receive(chunk: string): void {

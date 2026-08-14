@@ -12,7 +12,7 @@
 - persistent JSON key/value records and atomic multi-operation put/delete transactions;
 - checksummed WAL, committed-only recovery, explicit corruption failures, and bounded untrusted lengths;
 - optional JSON collection schema with string primary keys and unique fields, rebuilt and checked on restart;
-- local-only version 1 NDJSON protocol over Unix domain sockets;
+- local-only version 1 NDJSON protocol over Unix domain sockets with a mandatory semantic capability handshake;
 - direct `put`, `get`, `delete`, `list`, `verify`, `backup`, `restore`, `export`, and `import` commands;
 - dependency-light TypeScript SDK that starts and owns the Rust sidecar.
 - crash-safe manual WAL checkpointing and an explicit, backup-first alpha-to-beta migration command.
@@ -55,9 +55,12 @@ Start the sidecar with it:
 ./target/debug/ferrite serve ./app-db --socket /tmp/ferrite.sock --schema ./schema.json
 ```
 
-The versioned protocol accepts one JSON object per line and returns one response per line:
+Each connection starts with a `hello` request that negotiates the highest mutually supported protocol, compression mode, and required/optional capabilities. Version 1 supports `none` compression and the `kv`, `transactions`, and `prefix-list` capabilities. Requests sent before a successful handshake are rejected. See [PROTOCOL.md](docs/PROTOCOL.md) for the compatibility contract.
+
+The negotiated protocol then accepts one JSON object per line and returns one response per line:
 
 ```json
+{"version":1,"id":0,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":["kv","transactions"],"optional":["prefix-list"]}}
 {"version":1,"id":1,"method":"put","key":"users/u1","value":{"id":"u1","email":"ada@example.com"}}
 {"version":1,"id":2,"method":"transaction","operations":[{"Put":{"key":"a","value":1}},{"Delete":{"key":"b"}}]}
 ```

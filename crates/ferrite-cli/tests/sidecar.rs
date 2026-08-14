@@ -5,6 +5,188 @@ use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+fn exchange(stream: &mut UnixStream, request: Value) -> Value {
+    writeln!(stream, "{request}").unwrap();
+    let mut line = String::new();
+    BufReader::new(stream.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn hello(stream: &mut UnixStream, id: u64) -> Value {
+    exchange(
+        stream,
+        json!({
+            "version": 1,
+            "id": id,
+            "method": "hello",
+            "protocol": {"min": 1, "max": 1},
+            "compression": ["none"],
+            "capabilities": {
+                "required": ["kv", "transactions"],
+                "optional": ["prefix-list"]
+            }
+        }),
+    )
+}
+
+#[test]
+fn sidecar_negotiates_hello_compatibility_matrix() {
+    let root = std::env::temp_dir().join(format!("ferrite-cli-handshake-{}", std::process::id()));
+    let socket = root.with_extension("sock");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&socket);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ferrite"))
+        .args([
+            "serve",
+            root.to_str().unwrap(),
+            "--socket",
+            socket.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !socket.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut compatible = UnixStream::connect(&socket).unwrap();
+    let negotiated = exchange(
+        &mut compatible,
+        json!({
+            "version": 1,
+            "id": 1,
+            "method": "hello",
+            "protocol": {"min": 1, "max": 1},
+            "compression": ["none"],
+            "capabilities": {
+                "required": ["kv", "transactions"],
+                "optional": ["prefix-list", "future-capability"]
+            }
+        }),
+    );
+    assert_eq!(negotiated["ok"], true);
+    assert_eq!(negotiated["result"]["protocol"], 1);
+    assert_eq!(negotiated["result"]["compression"], "none");
+    assert_eq!(
+        negotiated["result"]["capabilities"],
+        json!(["kv", "transactions", "prefix-list"])
+    );
+
+    let mut wider = UnixStream::connect(&socket).unwrap();
+    let wider_negotiated = exchange(
+        &mut wider,
+        json!({
+            "version": 1,
+            "id": 2,
+            "method": "hello",
+            "protocol": {"min": 0, "max": 2},
+            "compression": ["gzip", "none"],
+            "capabilities": {"required": [], "optional": ["kv"]}
+        }),
+    );
+    assert_eq!(wider_negotiated["ok"], true);
+    assert_eq!(wider_negotiated["result"]["protocol"], 1);
+    assert_eq!(wider_negotiated["result"]["compression"], "none");
+    assert_eq!(wider_negotiated["result"]["capabilities"], json!(["kv"]));
+    assert_eq!(
+        exchange(
+            &mut compatible,
+            json!({"version":1,"id":2,"method":"get","key":"missing"}),
+        )["ok"],
+        true
+    );
+
+    let cases = [
+        (
+            json!({"version":1,"id":3,"method":"hello","protocol":{"min":2,"max":3},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "incompatible protocol versions",
+        ),
+        (
+            json!({"version":1,"id":4,"method":"hello","protocol":{"min":1,"max":1},"compression":["gzip"],"capabilities":{"required":[],"optional":[]}}),
+            "no mutually supported compression",
+        ),
+        (
+            json!({"version":1,"id":5,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":["future-capability"],"optional":[]}}),
+            "unsupported required capability: future-capability",
+        ),
+        (
+            json!({"version":1,"id":6,"method":"hello","protocol":{"min":2,"max":1},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "incompatible protocol versions",
+        ),
+        (
+            json!({"version":1,"id":7,"method":"hello","protocol":{"min":1,"max":1},"compression":[],"capabilities":{"required":[],"optional":[]}}),
+            "no mutually supported compression",
+        ),
+        (
+            json!({"version":1,"id":8,"method":"hello","compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "missing protocol range",
+        ),
+        (
+            json!({"version":1,"id":9,"method":"hello","protocol":{"min":"1","max":1},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "missing protocol minimum",
+        ),
+        (
+            json!({"version":1,"id":10,"method":"hello","protocol":{"min":1,"max":1},"compression":"none","capabilities":{"required":[],"optional":[]}}),
+            "missing array compression",
+        ),
+        (
+            json!({"version":1,"id":11,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":[1],"optional":[]}}),
+            "required must contain strings",
+        ),
+        (
+            json!({"version":1,"id":12,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"]}),
+            "missing capabilities",
+        ),
+    ];
+    for (request, expected_error) in cases {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        let response = exchange(&mut stream, request);
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], expected_error);
+    }
+
+    let mut retry = UnixStream::connect(&socket).unwrap();
+    assert_eq!(
+        exchange(
+            &mut retry,
+            json!({"version":1,"id":6,"method":"hello","protocol":{"min":2,"max":2},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+        )["ok"],
+        false
+    );
+    assert_eq!(hello(&mut retry, 7)["ok"], true);
+    let repeated = hello(&mut retry, 8);
+    assert_eq!(repeated["ok"], false);
+    assert_eq!(repeated["error"], "hello handshake already completed");
+
+    let mut limited = UnixStream::connect(&socket).unwrap();
+    assert_eq!(
+        exchange(
+            &mut limited,
+            json!({"version":1,"id":9,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":["kv"],"optional":[]}}),
+        )["ok"],
+        true
+    );
+    let unavailable = exchange(&mut limited, json!({"version":1,"id":10,"method":"list"}));
+    assert_eq!(unavailable["ok"], false);
+    assert_eq!(
+        unavailable["error"],
+        "capability not negotiated: prefix-list"
+    );
+
+    let mut missing = UnixStream::connect(&socket).unwrap();
+    let response = exchange(&mut missing, json!({"version":1,"id":11,"method":"list"}));
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"], "hello handshake required");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_file(socket);
+}
+
 #[test]
 fn sidecar_speaks_versioned_ndjson() {
     let root = std::env::temp_dir().join(format!("ferrite-cli-{}", std::process::id()));
@@ -30,6 +212,7 @@ fn sidecar_speaks_versioned_ndjson() {
         0o600
     );
     let mut stream = UnixStream::connect(&socket).unwrap();
+    assert_eq!(hello(&mut stream, 1)["ok"], true);
     writeln!(stream, "{}", json!({"version":1,"id":1,"method":"transaction","operations":[{"Put":{"key":"hello","value":{"world":true}}}]})).unwrap();
     let mut line = String::new();
     BufReader::new(stream.try_clone().unwrap())
@@ -109,7 +292,8 @@ fn sidecar_rejects_protocol_mismatch_and_oversized_requests() {
     }
 
     let mut healthy = UnixStream::connect(&socket).unwrap();
-    writeln!(healthy, "{}", json!({"version":1,"id":8,"method":"list"})).unwrap();
+    assert_eq!(hello(&mut healthy, 8)["ok"], true);
+    writeln!(healthy, "{}", json!({"version":1,"id":9,"method":"list"})).unwrap();
     line.clear();
     BufReader::new(healthy).read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
@@ -173,7 +357,8 @@ fn idle_client_does_not_block_other_clients() {
     healthy
         .set_read_timeout(Some(Duration::from_millis(500)))
         .unwrap();
-    writeln!(healthy, "{}", json!({"version":1,"id":9,"method":"list"})).unwrap();
+    assert_eq!(hello(&mut healthy, 9)["ok"], true);
+    writeln!(healthy, "{}", json!({"version":1,"id":10,"method":"list"})).unwrap();
     let mut line = String::new();
     let result = BufReader::new(healthy).read_line(&mut line);
 

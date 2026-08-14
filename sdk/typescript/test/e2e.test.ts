@@ -13,6 +13,11 @@ test("Node sidecar transaction persists to disk", async () => {
   const binary = resolve(process.env.FERRITE_BIN ?? "../../target/debug/ferrite");
   const socket = join(root, "sidecar.sock");
   const db = await FerriteDB.open(root, { binary, socket });
+  assert.deepEqual(db.protocol, {
+    protocol: 1,
+    compression: "none",
+    capabilities: ["kv", "transactions", "prefix-list"]
+  });
   await db.transaction([
     { Put: { key: "users/1", value: { name: "Ada" } } },
     { Put: { key: "users/2", value: { name: "Grace" } } }
