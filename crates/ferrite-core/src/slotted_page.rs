@@ -290,18 +290,22 @@ pub fn put_record(pager: &mut Pager, payload: &[u8]) -> Result<RecordId, Slotted
         return Err(SlottedError::PayloadTooLarge);
     }
     let page_size = pager.page_size();
-    let mut home = SlottedPage::new(page_size);
-    if home.contiguous_free() >= payload.len() {
-        let mut inline = Vec::with_capacity(1 + payload.len());
+    let inline_len = payload.len().saturating_add(1);
+    if inline_len <= u16::MAX as usize {
+        let mut home = SlottedPage::new(page_size);
+        let mut inline = Vec::with_capacity(inline_len);
         inline.push(KIND_INLINE);
         inline.extend_from_slice(payload);
-        if home.contiguous_free() >= inline.len() {
-            let slot = home.insert(&inline)?;
-            let page = pager.alloc().map_err(SlottedError::Pager)?;
-            pager
-                .write_page(page, home.as_bytes())
-                .map_err(SlottedError::Pager)?;
-            return Ok(RecordId { page, slot });
+        match home.insert(&inline) {
+            Ok(slot) => {
+                let page = pager.alloc().map_err(SlottedError::Pager)?;
+                pager
+                    .write_page(page, home.as_bytes())
+                    .map_err(SlottedError::Pager)?;
+                return Ok(RecordId { page, slot });
+            }
+            Err(SlottedError::NoSpace) => {}
+            Err(err) => return Err(err),
         }
     }
 
@@ -394,6 +398,9 @@ fn decode_overflow(pager: &mut Pager, raw: &[u8]) -> Result<Vec<u8>, SlottedErro
             .try_into()
             .unwrap(),
     ) as usize;
+    if declared == 0 || declared > MAX_RECORD_BYTES {
+        return Err(SlottedError::Corrupt("overflow length out of range"));
+    }
     let mut out = Vec::new();
     for (idx, slot) in chunks {
         let page = pager.read(idx).map_err(SlottedError::Pager)?;
