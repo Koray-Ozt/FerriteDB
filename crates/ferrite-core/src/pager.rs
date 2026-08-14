@@ -104,8 +104,7 @@ impl Pager {
             u64::from_le_bytes(buf[OFF_PAGE_COUNT..OFF_PAGE_COUNT + 8].try_into().unwrap());
         let free_head =
             u64::from_le_bytes(buf[OFF_FREE_HEAD..OFF_FREE_HEAD + 8].try_into().unwrap());
-        let wal_seq =
-            u32::from_le_bytes(buf[OFF_WAL_SEQ..OFF_WAL_SEQ + 4].try_into().unwrap());
+        let wal_seq = u32::from_le_bytes(buf[OFF_WAL_SEQ..OFF_WAL_SEQ + 4].try_into().unwrap());
 
         Ok(Self {
             file,
@@ -134,9 +133,10 @@ impl Pager {
             Ok(idx)
         } else {
             let idx = self.page_count;
-            self.page_count = self.page_count.checked_add(1).ok_or(PagerError::Corrupt(
-                "page count overflow",
-            ))?;
+            self.page_count = self
+                .page_count
+                .checked_add(1)
+                .ok_or(PagerError::Corrupt("page count overflow"))?;
             // Extend the file with a zero page.
             self.zero_page(idx)?;
             self.write_header()?;
@@ -254,16 +254,11 @@ impl Pager {
         let ps = self.page_size as usize;
         let mut header = vec![0u8; ps];
         header[OFF_MAGIC..OFF_MAGIC + 8].copy_from_slice(MAGIC);
-        header[OFF_VERSION..OFF_VERSION + 4]
-            .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-        header[OFF_PAGE_SIZE..OFF_PAGE_SIZE + 4]
-            .copy_from_slice(&self.page_size.to_le_bytes());
-        header[OFF_PAGE_COUNT..OFF_PAGE_COUNT + 8]
-            .copy_from_slice(&self.page_count.to_le_bytes());
-        header[OFF_FREE_HEAD..OFF_FREE_HEAD + 8]
-            .copy_from_slice(&self.free_head.to_le_bytes());
-        header[OFF_WAL_SEQ..OFF_WAL_SEQ + 4]
-            .copy_from_slice(&self.wal_seq.to_le_bytes());
+        header[OFF_VERSION..OFF_VERSION + 4].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        header[OFF_PAGE_SIZE..OFF_PAGE_SIZE + 4].copy_from_slice(&self.page_size.to_le_bytes());
+        header[OFF_PAGE_COUNT..OFF_PAGE_COUNT + 8].copy_from_slice(&self.page_count.to_le_bytes());
+        header[OFF_FREE_HEAD..OFF_FREE_HEAD + 8].copy_from_slice(&self.free_head.to_le_bytes());
+        header[OFF_WAL_SEQ..OFF_WAL_SEQ + 4].copy_from_slice(&self.wal_seq.to_le_bytes());
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(&header)?;
         Ok(())
@@ -338,7 +333,11 @@ impl<'a> PageMut<'a> {
 
     /// Flush the page buffer to disk and sync.
     pub fn flush(self) -> Result<(), PagerError> {
-        let PageMut { pager, page_idx, data } = self;
+        let PageMut {
+            pager,
+            page_idx,
+            data,
+        } = self;
         pager
             .file
             .seek(SeekFrom::Start(pager.page_offset(page_idx)))?;
