@@ -1,3 +1,4 @@
+pub mod pager;
 pub mod wal;
 
 use serde::{Deserialize, Serialize};
