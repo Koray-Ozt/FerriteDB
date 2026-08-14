@@ -16,6 +16,9 @@ use std::time::Duration;
 
 const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CONNECTION_WORKERS: usize = 64;
+const PROTOCOL_VERSION: u64 = 1;
+const SUPPORTED_COMPRESSION: &str = "none";
+const CAPABILITIES: &[&str] = &["kv", "transactions", "prefix-list"];
 static STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 type AnyError = Box<dyn std::error::Error>;
@@ -201,6 +204,7 @@ fn read_schema_input(path: &Path) -> Result<Vec<u8>, AnyError> {
 fn handle(mut stream: UnixStream, database: &Arc<Mutex<Database>>) -> Result<(), AnyError> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
+    let mut negotiated: Option<Vec<String>> = None;
     loop {
         let mut line = String::new();
         let count = (&mut reader)
@@ -230,6 +234,49 @@ fn handle(mut stream: UnixStream, database: &Arc<Mutex<Database>>) -> Result<(),
             )?;
             continue;
         }
+        if request.get("method").and_then(Value::as_str) == Some("hello") {
+            let result = if negotiated.is_some() {
+                Err("hello handshake already completed".into())
+            } else {
+                negotiate(&request).inspect(|value| {
+                    negotiated = Some(
+                        value["capabilities"]
+                            .as_array()
+                            .expect("negotiated capabilities are an array")
+                            .iter()
+                            .map(|capability| {
+                                capability
+                                    .as_str()
+                                    .expect("negotiated capabilities are strings")
+                                    .to_owned()
+                            })
+                            .collect(),
+                    )
+                })
+            };
+            let response = match result {
+                Ok(value) => json!({"version":1,"id":id,"ok":true,"result":value}),
+                Err(error) => {
+                    json!({"version":1,"id":id,"ok":false,"error":error.to_string()})
+                }
+            };
+            write_response(&mut stream, response)?;
+            continue;
+        }
+        let Some(capabilities) = negotiated.as_ref() else {
+            write_response(
+                &mut stream,
+                json!({"version":1,"id":id,"ok":false,"error":"hello handshake required"}),
+            )?;
+            continue;
+        };
+        if let Err(error) = require_method_capability(&request, capabilities) {
+            write_response(
+                &mut stream,
+                json!({"version":1,"id":id,"ok":false,"error":error.to_string()}),
+            )?;
+            continue;
+        }
         let result = dispatch(&request, database);
         let response = match result {
             Ok(value) => json!({"version":1,"id":id,"ok":true,"result":value}),
@@ -238,6 +285,87 @@ fn handle(mut stream: UnixStream, database: &Arc<Mutex<Database>>) -> Result<(),
         write_response(&mut stream, response)?;
     }
 }
+
+fn negotiate(request: &Value) -> Result<Value, AnyError> {
+    let protocol = request.get("protocol").ok_or("missing protocol range")?;
+    let minimum = protocol
+        .get("min")
+        .and_then(Value::as_u64)
+        .ok_or("missing protocol minimum")?;
+    let maximum = protocol
+        .get("max")
+        .and_then(Value::as_u64)
+        .ok_or("missing protocol maximum")?;
+    if minimum > maximum || PROTOCOL_VERSION < minimum || PROTOCOL_VERSION > maximum {
+        return Err("incompatible protocol versions".into());
+    }
+
+    let compression = string_array(request, "compression")?;
+    if !compression
+        .iter()
+        .any(|value| value == SUPPORTED_COMPRESSION)
+    {
+        return Err("no mutually supported compression".into());
+    }
+
+    let capabilities = request.get("capabilities").ok_or("missing capabilities")?;
+    let required = string_array(capabilities, "required")?;
+    for capability in &required {
+        if !CAPABILITIES.contains(&capability.as_str()) {
+            return Err(format!("unsupported required capability: {capability}").into());
+        }
+    }
+    let optional = string_array(capabilities, "optional")?;
+    let selected: Vec<&str> = CAPABILITIES
+        .iter()
+        .copied()
+        .filter(|capability| {
+            required.iter().any(|value| value == capability)
+                || optional.iter().any(|value| value == capability)
+        })
+        .collect();
+
+    Ok(json!({
+        "protocol": PROTOCOL_VERSION,
+        "compression": SUPPORTED_COMPRESSION,
+        "capabilities": selected,
+    }))
+}
+
+fn string_array(value: &Value, field: &str) -> Result<Vec<String>, AnyError> {
+    let values = value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("missing array {field}"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{field} must contain strings").into())
+        })
+        .collect()
+}
+
+fn require_method_capability(request: &Value, negotiated: &[String]) -> Result<(), AnyError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or("missing method")?;
+    let required = match method {
+        "put" | "get" | "delete" => "kv",
+        "transaction" => "transactions",
+        "list" => "prefix-list",
+        _ => return Ok(()),
+    };
+    if negotiated.iter().any(|capability| capability == required) {
+        Ok(())
+    } else {
+        Err(format!("capability not negotiated: {required}").into())
+    }
+}
+
 fn write_response(stream: &mut UnixStream, value: Value) -> io::Result<()> {
     serde_json::to_writer(&mut *stream, &value)?;
     stream.write_all(b"\n")?;

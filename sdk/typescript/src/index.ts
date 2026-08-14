@@ -14,6 +14,12 @@ export type Operation =
 
 export interface OpenOptions { binary?: string; schema?: string; socket?: string }
 
+export interface ProtocolNegotiation {
+  protocol: number;
+  compression: string;
+  capabilities: string[];
+}
+
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
 type SocketIdentity = { dev: number; ino: number };
 
@@ -81,6 +87,7 @@ export class FerriteDB {
   private nextId = 1;
   private buffer = "";
   private readonly pending = new Map<number, Pending>();
+  private negotiation?: ProtocolNegotiation;
   private constructor(private readonly child: ChildProcess, private readonly socket: Socket, private readonly socketPath: string, private readonly socketIdentity: SocketIdentity) {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.receive(chunk));
@@ -113,7 +120,9 @@ export class FerriteDB {
       identity = await socketIdentity(socketPath);
       const socket = createConnection(socketPath);
       await once(socket, "connect");
-      return new FerriteDB(child, socket, socketPath, identity);
+      const database = new FerriteDB(child, socket, socketPath, identity);
+      await database.negotiate();
+      return database;
     } catch (error) {
       await terminateChild(child);
       if (identity) await removeSocket(socketPath, identity);
@@ -126,6 +135,10 @@ export class FerriteDB {
   delete(key: string): Promise<void> { return this.request("delete", { key }) as Promise<void>; }
   list<T = unknown>(prefix?: string): Promise<Array<[string, T]>> { return this.request("list", prefix === undefined ? {} : { prefix }) as Promise<Array<[string, T]>>; }
   transaction(operations: Operation[]): Promise<void> { return this.request("transaction", { operations }) as Promise<void>; }
+  get protocol(): ProtocolNegotiation {
+    if (!this.negotiation) throw new Error("FerriteDB protocol handshake is incomplete");
+    return this.negotiation;
+  }
 
   async close(): Promise<void> {
     this.socket.end();
@@ -141,6 +154,17 @@ export class FerriteDB {
         if (error) { this.pending.delete(id); reject(error); }
       });
     });
+  }
+
+  private async negotiate(): Promise<void> {
+    this.negotiation = await this.request("hello", {
+      protocol: { min: 1, max: 1 },
+      compression: ["none"],
+      capabilities: {
+        required: ["kv", "transactions"],
+        optional: ["prefix-list"]
+      }
+    }) as ProtocolNegotiation;
   }
 
   private receive(chunk: string): void {
