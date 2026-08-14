@@ -74,6 +74,23 @@ fn sidecar_negotiates_hello_compatibility_matrix() {
         negotiated["result"]["capabilities"],
         json!(["kv", "transactions", "prefix-list"])
     );
+
+    let mut wider = UnixStream::connect(&socket).unwrap();
+    let wider_negotiated = exchange(
+        &mut wider,
+        json!({
+            "version": 1,
+            "id": 2,
+            "method": "hello",
+            "protocol": {"min": 0, "max": 2},
+            "compression": ["gzip", "none"],
+            "capabilities": {"required": [], "optional": ["kv"]}
+        }),
+    );
+    assert_eq!(wider_negotiated["ok"], true);
+    assert_eq!(wider_negotiated["result"]["protocol"], 1);
+    assert_eq!(wider_negotiated["result"]["compression"], "none");
+    assert_eq!(wider_negotiated["result"]["capabilities"], json!(["kv"]));
     assert_eq!(
         exchange(
             &mut compatible,
@@ -94,6 +111,34 @@ fn sidecar_negotiates_hello_compatibility_matrix() {
         (
             json!({"version":1,"id":5,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":["future-capability"],"optional":[]}}),
             "unsupported required capability: future-capability",
+        ),
+        (
+            json!({"version":1,"id":6,"method":"hello","protocol":{"min":2,"max":1},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "incompatible protocol versions",
+        ),
+        (
+            json!({"version":1,"id":7,"method":"hello","protocol":{"min":1,"max":1},"compression":[],"capabilities":{"required":[],"optional":[]}}),
+            "no mutually supported compression",
+        ),
+        (
+            json!({"version":1,"id":8,"method":"hello","compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "missing protocol range",
+        ),
+        (
+            json!({"version":1,"id":9,"method":"hello","protocol":{"min":"1","max":1},"compression":["none"],"capabilities":{"required":[],"optional":[]}}),
+            "missing protocol minimum",
+        ),
+        (
+            json!({"version":1,"id":10,"method":"hello","protocol":{"min":1,"max":1},"compression":"none","capabilities":{"required":[],"optional":[]}}),
+            "missing array compression",
+        ),
+        (
+            json!({"version":1,"id":11,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":[1],"optional":[]}}),
+            "required must contain strings",
+        ),
+        (
+            json!({"version":1,"id":12,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"]}),
+            "missing capabilities",
         ),
     ];
     for (request, expected_error) in cases {

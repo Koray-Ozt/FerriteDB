@@ -7,6 +7,13 @@ import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import {
+  validateNegotiation,
+  type ProtocolNegotiation,
+  type ProtocolOffer
+} from "./protocol.js";
+
+export type { ProtocolNegotiation } from "./protocol.js";
 
 export type Operation =
   | { Put: { key: string; value: unknown } }
@@ -14,14 +21,17 @@ export type Operation =
 
 export interface OpenOptions { binary?: string; schema?: string; socket?: string }
 
-export interface ProtocolNegotiation {
-  protocol: number;
-  compression: string;
-  capabilities: string[];
-}
-
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
 type SocketIdentity = { dev: number; ino: number };
+
+const PROTOCOL_OFFER: ProtocolOffer = {
+  protocol: { min: 1, max: 1 },
+  compression: ["none"],
+  capabilities: {
+    required: ["kv", "transactions"],
+    optional: ["prefix-list"]
+  }
+};
 
 const require = createRequire(import.meta.url);
 
@@ -157,14 +167,8 @@ export class FerriteDB {
   }
 
   private async negotiate(): Promise<void> {
-    this.negotiation = await this.request("hello", {
-      protocol: { min: 1, max: 1 },
-      compression: ["none"],
-      capabilities: {
-        required: ["kv", "transactions"],
-        optional: ["prefix-list"]
-      }
-    }) as ProtocolNegotiation;
+    const result = await this.request("hello", { ...PROTOCOL_OFFER });
+    this.negotiation = validateNegotiation(result, PROTOCOL_OFFER);
   }
 
   private receive(chunk: string): void {

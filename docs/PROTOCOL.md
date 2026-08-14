@@ -37,5 +37,8 @@ Version 1 supports only the `none` compression mode. This means NDJSON frames ar
 | Compression list does not include `none` | `no mutually supported compression` |
 | A required capability is unknown | `unsupported required capability: <name>` |
 | Only an optional capability is unknown | Handshake succeeds and omits that capability |
+| A required handshake field is absent, has the wrong type, or an array contains a non-string value | Reject the handshake with a field-specific error; the connection remains unnegotiated |
+
+The protocol range is inclusive, so a wider range such as `0..2` selects protocol `1`. Compression preferences are ordered by the client, but the sidecar may select any mutually supported mode; version 1 supports only `none`, so an offer such as `["gzip", "none"]` selects `none`. Empty compression lists are incompatible.
 
 The top-level `version` remains the frame format discriminator. Protocol 1 requires it to equal `1` on the handshake and all subsequent requests. Future sidecars may add protocol versions and capabilities, but must select only values offered by the client and must reject unsupported required capabilities rather than silently degrading behavior.

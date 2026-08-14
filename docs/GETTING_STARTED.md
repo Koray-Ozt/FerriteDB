@@ -282,15 +282,16 @@ SOCKET="$WORKDIR/manual.sock"
 "$FERRITE" serve "$DB" --socket "$SOCKET"
 ```
 
-The socket is created with mode `0600`. Requests and responses are newline-delimited JSON. A request must fit within 2 MiB and include protocol version `1` and a numeric request ID.
+The socket is created with mode `0600`. Requests and responses are newline-delimited JSON. A request must fit within 2 MiB and include protocol version `1` and a numeric request ID. Every connection must complete the `hello` handshake before database methods are accepted; see [the protocol contract](PROTOCOL.md) for the full compatibility matrix.
 
 Example requests:
 
 ```json
-{"version":1,"id":1,"method":"put","key":"users/u1","value":{"name":"Ada"}}
-{"version":1,"id":2,"method":"get","key":"users/u1"}
-{"version":1,"id":3,"method":"list","prefix":"users/"}
-{"version":1,"id":4,"method":"transaction","operations":[{"Put":{"key":"a","value":1}},{"Delete":{"key":"b"}}]}
+{"version":1,"id":1,"method":"hello","protocol":{"min":1,"max":1},"compression":["none"],"capabilities":{"required":["kv","transactions"],"optional":["prefix-list"]}}
+{"version":1,"id":2,"method":"put","key":"users/u1","value":{"name":"Ada"}}
+{"version":1,"id":3,"method":"get","key":"users/u1"}
+{"version":1,"id":4,"method":"list","prefix":"users/"}
+{"version":1,"id":5,"method":"transaction","operations":[{"Put":{"key":"a","value":1}},{"Delete":{"key":"b"}}]}
 ```
 
 The sidecar supports at most 64 active connection workers, applies a 30-second read timeout, and serializes database operations through one process-local lock.
