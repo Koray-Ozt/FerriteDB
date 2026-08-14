@@ -128,6 +128,21 @@ fn stores_100b_and_64kib_payloads_across_slotted_pages() {
 }
 
 #[test]
+fn near_page_size_payloads_spill_to_overflow_instead_of_nospace() {
+    let path = temp_path("near-page");
+    let mut pager = Pager::create(&path, PAGE_4K).unwrap();
+    // A fresh 4 KiB page has 4088 contiguous free bytes. An inline record
+    // also needs a 1-byte kind tag and a 6-byte slot, so 4082..=4087 must
+    // overflow rather than fail with NoSpace.
+    for len in [4082usize, 4087] {
+        let data = payload(0x3C, len);
+        let id = put_record(&mut pager, &data).expect("near-page payload must be stored");
+        assert_eq!(get_record(&mut pager, id).unwrap(), data);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn oversized_payload_is_rejected() {
     let path = temp_path("too-big");
     let mut pager = Pager::create(&path, PAGE_8K).unwrap();
