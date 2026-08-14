@@ -1,8 +1,7 @@
-use ferrite_core::pager::{PagerError, Pager, PAGE_4K, PAGE_8K};
+use ferrite_core::pager::{PAGE_4K, PAGE_8K, Pager, PagerError};
 
 fn temp_path(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir()
-        .join(format!("ferrite-pager-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("ferrite-pager-{name}-{}", std::process::id()));
     let _ = std::fs::remove_file(&p);
     p
 }
