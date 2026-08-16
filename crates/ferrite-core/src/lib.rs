@@ -1,7 +1,9 @@
+pub mod bench_metrics;
 pub mod buffer_pool;
 pub mod pager;
 pub mod slotted_page;
 pub mod wal;
+pub mod workload;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

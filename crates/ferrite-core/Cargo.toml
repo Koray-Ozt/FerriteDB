@@ -7,8 +7,31 @@ license.workspace = true
 [features]
 crash-testing = []
 
+[[bin]]
+name = "ferrite-bench"
+path = "src/bin/ferrite_bench.rs"
+
 [dependencies]
 fs2 = "0.4"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "ycsb_workloads"
+harness = false
+
+[[bench]]
+name = "buffer_pool_bench"
+harness = false
+
+[[bench]]
+name = "storage_bench"
+harness = false
+
+[[bench]]
+name = "wal_bench"
+harness = false
