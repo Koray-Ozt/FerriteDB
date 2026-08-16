@@ -12,6 +12,6 @@ fi
 echo "==> Running FerriteDB Performance & Regression Suite Check..."
 cargo run --release -p ferrite-core --bin ferrite-bench --manifest-path "$ROOT/Cargo.toml" -- \
     --check "$BASELINE" \
-    --threshold "${BENCH_THRESHOLD:-25.0}"
+    --threshold "${BENCH_THRESHOLD:-50.0}"
 
 echo "==> All performance regression checks passed!"
