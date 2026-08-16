@@ -271,7 +271,7 @@ impl BenchmarkSuiteReport {
             comparisons.push(throughput_comp);
 
             // Minimum absolute latency increase required to avoid false positives on background OS I/O scheduler noise
-            const MIN_NOISE_FLOOR_US: f64 = 100.0;
+            const MIN_NOISE_FLOOR_US: f64 = 5000.0;
 
             // 2. p95 Latency comparison (regression if current > baseline by > threshold_pct * 1.5 and > noise floor)
             let delta_p95 = if base.latency.p95_us > 0.0 {

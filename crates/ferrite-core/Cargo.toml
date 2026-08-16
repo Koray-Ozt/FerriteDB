@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "wal_bench"
 harness = false
+
+[[bench]]
+name = "btree_bench"
+harness = false
