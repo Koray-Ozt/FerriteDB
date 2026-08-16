@@ -35,6 +35,12 @@ jobs:
       - name: Formatting
         run: cargo fmt --all --check
 
+      - name: Benchmark compilation
+        run: cargo bench --no-run --locked
+
+      - name: Performance regression check
+        run: bash scripts/check-bench-regression.sh
+
       - uses: taiki-e/install-action@fc79696c54ba9f873726bafbf4e45601329839fd # cargo-audit
       - name: Dependency audit
         run: cargo audit

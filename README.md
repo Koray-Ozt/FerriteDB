@@ -92,6 +92,8 @@ await db.close();
 cargo fmt --all --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+cargo bench --no-run
+bash scripts/check-bench-regression.sh
 cd sdk/typescript
 npm run build
 FERRITE_BIN=../../target/debug/ferrite npm test

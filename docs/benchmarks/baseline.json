@@ -1,0 +1,355 @@
+{
+  "title": "FerriteDB Baseline Performance Report",
+  "timestamp": "2026-08-16",
+  "git_commit": "feat/issue-8-benchmarks",
+  "rustc_version": "rustc 1.97.1",
+  "results": [
+    {
+      "name": "ycsb_workload_a (50/50)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 2519.812524,
+      "ops_per_sec": 992.137302354324,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.21,
+        "avg_us": 1005.8600807999997,
+        "p50_us": 1790.498,
+        "p90_us": 2047.161,
+        "p95_us": 2165.133,
+        "p99_us": 2783.757,
+        "p99_9_us": 6116.747,
+        "max_us": 6304.199
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 620306,
+        "wal_bytes": 760597,
+        "amplification_ratio": 1.2261641834836354
+      }
+    },
+    {
+      "name": "ycsb_workload_b (95/5)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 261.451286,
+      "ops_per_sec": 9562.010721951468,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.18,
+        "avg_us": 104.1588703999997,
+        "p50_us": 0.35,
+        "p90_us": 0.812,
+        "p95_us": 1810.546,
+        "p99_us": 2038.585,
+        "p99_9_us": 2664.672,
+        "max_us": 3532.214
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 311907,
+        "wal_bytes": 379644,
+        "amplification_ratio": 1.217170502746011
+      }
+    },
+    {
+      "name": "ycsb_workload_c (100% Read)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 2.221549,
+      "ops_per_sec": 1125340.9220323297,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.21,
+        "avg_us": 0.5494392000000003,
+        "p50_us": 0.481,
+        "p90_us": 0.842,
+        "p95_us": 0.992,
+        "p99_us": 1.282,
+        "p99_9_us": 2.294,
+        "max_us": 12.393
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 275890,
+        "wal_bytes": 334898,
+        "amplification_ratio": 1.2138823444126283
+      }
+    },
+    {
+      "name": "ycsb_workload_d (Read Latest)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 1829.984176,
+      "ops_per_sec": 1366.1320315154462,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.24,
+        "avg_us": 730.5658239999998,
+        "p50_us": 0.912,
+        "p90_us": 2039.446,
+        "p95_us": 2094.911,
+        "p99_us": 2478.382,
+        "p99_9_us": 5271.506,
+        "max_us": 5865.374
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 527619,
+        "wal_bytes": 646071,
+        "amplification_ratio": 1.2245029083486378
+      }
+    },
+    {
+      "name": "ycsb_workload_e (Range Scan)",
+      "category": "YCSB Workload",
+      "total_ops": 1250,
+      "duration_ms": 733.769081,
+      "ops_per_sec": 1703.5332127874162,
+      "latency": {
+        "count": 1250,
+        "min_us": 0.291,
+        "avg_us": 585.8706048000004,
+        "p50_us": 9.278,
+        "p90_us": 2027.364,
+        "p95_us": 2057.481,
+        "p99_us": 2456.752,
+        "p99_9_us": 3533.077,
+        "max_us": 6462.748
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 375252,
+        "wal_bytes": 459519,
+        "amplification_ratio": 1.2245610949441974
+      }
+    },
+    {
+      "name": "ycsb_workload_f (RMW)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 3467.86108,
+      "ops_per_sec": 720.9054637217474,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.191,
+        "avg_us": 1385.1541644000017,
+        "p50_us": 1870.93,
+        "p90_us": 2073.851,
+        "p95_us": 2217.251,
+        "p99_us": 2822.961,
+        "p99_9_us": 6240.641,
+        "max_us": 8037.401
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 501019,
+        "wal_bytes": 913284,
+        "amplification_ratio": 1.822853025533962
+      }
+    },
+    {
+      "name": "point_lookup (100% Get)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 1749.233303,
+      "ops_per_sec": 1429.1975779974046,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.21,
+        "avg_us": 698.2740199999994,
+        "p50_us": 0.922,
+        "p90_us": 2054.284,
+        "p95_us": 2180.071,
+        "p99_us": 2710.48,
+        "p99_9_us": 5554.25,
+        "max_us": 5987.916
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 510405,
+        "wal_bytes": 625593,
+        "amplification_ratio": 1.2256796073706175
+      }
+    },
+    {
+      "name": "write_heavy (90% Put)",
+      "category": "YCSB Workload",
+      "total_ops": 2500,
+      "duration_ms": 5159.809346,
+      "ops_per_sec": 484.5140260730866,
+      "latency": {
+        "count": 2500,
+        "min_us": 0.351,
+        "avg_us": 2060.7154408000015,
+        "p50_us": 2154.604,
+        "p90_us": 2581.787,
+        "p95_us": 2943.959,
+        "p99_us": 3904.366,
+        "p99_9_us": 6470.144,
+        "max_us": 7619.606
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 900012,
+        "wal_bytes": 1107224,
+        "amplification_ratio": 1.2302324857890783
+      }
+    },
+    {
+      "name": "bpm_clock_cache_hit_100",
+      "category": "Buffer Pool",
+      "total_ops": 5000,
+      "duration_ms": 0.8750760000000001,
+      "ops_per_sec": 5713789.430860862,
+      "latency": {
+        "count": 5000,
+        "min_us": 0.09,
+        "avg_us": 0.11830340000000406,
+        "p50_us": 0.111,
+        "p90_us": 0.131,
+        "p95_us": 0.14,
+        "p99_us": 0.161,
+        "p99_9_us": 0.46,
+        "max_us": 2.224
+      },
+      "cache_stats": {
+        "pool_size": 128,
+        "page_size": 4096,
+        "hits": 5100,
+        "misses": 0,
+        "hit_ratio_pct": 100.0,
+        "evictions": 0,
+        "dirty_evictions": 0,
+        "wal_syncs": 0
+      },
+      "write_amp": null
+    },
+    {
+      "name": "bpm_clock_eviction_constrained",
+      "category": "Buffer Pool",
+      "total_ops": 5000,
+      "duration_ms": 1334.816057,
+      "ops_per_sec": 3745.834471932787,
+      "latency": {
+        "count": 5000,
+        "min_us": 0.09,
+        "avg_us": 266.8824667999988,
+        "p50_us": 2.936,
+        "p90_us": 1444.368,
+        "p95_us": 1453.345,
+        "p99_us": 1579.923,
+        "p99_9_us": 3028.208,
+        "max_us": 6041.528
+      },
+      "cache_stats": {
+        "pool_size": 32,
+        "page_size": 4096,
+        "hits": 1254,
+        "misses": 3846,
+        "hit_ratio_pct": 24.58823529411765,
+        "evictions": 3942,
+        "dirty_evictions": 1025,
+        "wal_syncs": 0
+      },
+      "write_amp": null
+    },
+    {
+      "name": "bpm_lru_k2_eviction_constrained",
+      "category": "Buffer Pool",
+      "total_ops": 5000,
+      "duration_ms": 1101.0052159999998,
+      "ops_per_sec": 4541.304552729749,
+      "latency": {
+        "count": 5000,
+        "min_us": 0.08,
+        "avg_us": 220.12573339999997,
+        "p50_us": 2.675,
+        "p90_us": 1438.407,
+        "p95_us": 1451.401,
+        "p99_us": 1578.781,
+        "p99_9_us": 1658.21,
+        "max_us": 7205.428
+      },
+      "cache_stats": {
+        "pool_size": 32,
+        "page_size": 4096,
+        "hits": 1251,
+        "misses": 3849,
+        "hit_ratio_pct": 24.529411764705884,
+        "evictions": 3945,
+        "dirty_evictions": 863,
+        "wal_syncs": 0
+      },
+      "write_amp": null
+    },
+    {
+      "name": "slotted_16kb_overflow_record",
+      "category": "Storage Engine",
+      "total_ops": 250,
+      "duration_ms": 4532.717154,
+      "ops_per_sec": 55.154555536160416,
+      "latency": {
+        "count": 250,
+        "min_us": 17447.65,
+        "avg_us": 18130.196796,
+        "p50_us": 17850.168,
+        "p90_us": 18414.901,
+        "p95_us": 20444.479,
+        "p99_us": 22426.659,
+        "p99_9_us": 22606.106,
+        "max_us": 22606.106
+      },
+      "cache_stats": null,
+      "write_amp": null
+    },
+    {
+      "name": "wal_append_1kb",
+      "category": "WAL Engine",
+      "total_ops": 1000,
+      "duration_ms": 1512.118881,
+      "ops_per_sec": 661.3236648025162,
+      "latency": {
+        "count": 1000,
+        "min_us": 1428.368,
+        "avg_us": 1511.890392999999,
+        "p50_us": 1454.777,
+        "p90_us": 1648.973,
+        "p95_us": 1652.851,
+        "p99_us": 1664.392,
+        "p99_9_us": 5570.722,
+        "max_us": 6074.0
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 1037000,
+        "wal_bytes": 1096008,
+        "amplification_ratio": 1.0569026036644167
+      }
+    },
+    {
+      "name": "wal_append_8kb",
+      "category": "WAL Engine",
+      "total_ops": 500,
+      "duration_ms": 825.2741070000001,
+      "ops_per_sec": 605.8593087544912,
+      "latency": {
+        "count": 500,
+        "min_us": 1452.202,
+        "avg_us": 1650.306756,
+        "p50_us": 1645.627,
+        "p90_us": 1655.174,
+        "p95_us": 1658.591,
+        "p99_us": 1821.187,
+        "p99_9_us": 5390.484,
+        "max_us": 5390.484
+      },
+      "cache_stats": null,
+      "write_amp": {
+        "logical_bytes": 4102500,
+        "wal_bytes": 4132008,
+        "amplification_ratio": 1.0071926873857404
+      }
+    }
+  ]
+}
