@@ -1,4 +1,5 @@
 pub mod bench_metrics;
+pub mod btree;
 pub mod buffer_pool;
 pub mod pager;
 pub mod slotted_page;
