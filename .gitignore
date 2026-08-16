@@ -9,3 +9,9 @@
 node_modules/
 dist/
 *.sock
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+build/

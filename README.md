@@ -14,7 +14,7 @@
 - optional JSON collection schema with string primary keys and unique fields, rebuilt and checked on restart;
 - local-only version 1 NDJSON protocol over Unix domain sockets with a mandatory semantic capability handshake;
 - direct `put`, `get`, `delete`, `list`, `verify`, `backup`, `restore`, `export`, and `import` commands;
-- dependency-light TypeScript SDK that starts and owns the Rust sidecar.
+- dependency-light TypeScript and Python SDKs that start and own the Rust sidecar.
 - crash-safe manual WAL checkpointing and an explicit, backup-first alpha-to-beta migration command.
 
 ## Build and try it
@@ -23,6 +23,8 @@ The easiest installation is a single command; no Rust toolchain or separate side
 
 ```bash
 npm install @ferritedb/sdk@beta
+# or for Python
+pip install ferritedb
 ```
 
 For a complete walkthrough—from the first write through schemas, checkpoint, backup/restore, JSONL portability, and the CLI—see **[Getting started with FerriteDB](docs/GETTING_STARTED.md)**.
@@ -86,6 +88,22 @@ await db.transaction([
 await db.close();
 ```
 
+## Python SDK
+
+```python
+from ferritedb import FerriteDB, Put, Delete
+
+with FerriteDB.open("./app-db") as db:
+    db.put("settings/theme", {"dark": True})
+    print(db.get("settings/theme"))
+    db.transaction([
+        Put("counter", 1),
+        Delete("obsolete"),
+    ])
+```
+
+Supports synchronous (`FerriteDB`) and asynchronous (`AsyncFerriteDB` via `asyncio`) clients with context managers and zero external dependencies.
+
 ## Verify the repository
 
 ```bash
@@ -98,6 +116,8 @@ cd sdk/typescript
 npm run build
 FERRITE_BIN=../../target/debug/ferrite npm test
 FERRITE_BIN=../../target/debug/ferrite npm run e2e
+cd ../python
+FERRITE_BIN=../../target/debug/ferrite PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 ## Limits and limitations
@@ -111,6 +131,7 @@ The packaged beta supports **Linux x86_64 only**. The source can build on macOS,
 - `crates/ferrite-core`: database, schema validation, constraints, WAL and recovery
 - `crates/ferrite-cli`: direct commands and local Unix-socket sidecar
 - `sdk/typescript`: Node.js SDK and real sidecar-to-disk e2e test
+- `sdk/python`: Python 3.10+ SDK (sync & asyncio) and sidecar e2e test suite
 
 Beta format 1 databases are identified by `format.json`. Future beta versions must read format 1 or provide a tested migration. Alpha databases without a manifest are not opened implicitly; use `ferrite migrate SOURCE DEST --backup BACKUP` to create an untouched backup and a separately verified beta copy. See [FORMAT.md](docs/FORMAT.md), [THREAT_MODEL.md](docs/THREAT_MODEL.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
 

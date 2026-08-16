@@ -77,8 +77,37 @@ try {
   db = await FerriteDB.open(restored);
   if ((await db.get("users/2"))?.name !== "Grace") throw new Error("restore verification failed");
   await db.close();
-  console.log("release acceptance passed");
+  console.log("release acceptance passed (typescript)");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
 JS
+
+PYTHONPATH="$ROOT/sdk/python/src" python3 - <<PY
+import os
+import shutil
+import tempfile
+from ferritedb import FerriteDB, Put, Delete
+
+root = tempfile.mkdtemp(prefix="ferrite-py-acceptance-")
+try:
+    db_path = os.path.join(root, "db")
+    with FerriteDB.open(db_path, binary="$ROOT/target/release/ferrite") as db:
+        db.put("status", {"ok": True})
+        assert db.get("status") == {"ok": True}
+        db.transaction([
+            Put("k1", "v1"),
+            Put("k2", "v2"),
+            Delete("status"),
+        ])
+        assert db.get("status") is None
+        assert db.get("k1") == "v1"
+        assert len(db.list()) == 2
+    
+    with FerriteDB.open(db_path, binary="$ROOT/target/release/ferrite") as reopened:
+        assert reopened.get("k2") == "v2"
+        assert reopened.get("status") is None
+    print("release acceptance passed (python)")
+finally:
+    shutil.rmtree(root, ignore_errors=True)
+PY
