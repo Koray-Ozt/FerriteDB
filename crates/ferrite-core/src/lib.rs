@@ -1,3 +1,4 @@
+pub mod buffer_pool;
 pub mod pager;
 pub mod slotted_page;
 pub mod wal;
