@@ -1,6 +1,6 @@
 {
   "name": "@ferritedb/linux-x64",
-  "version": "0.1.0-beta.1",
+  "version": "0.2.0-beta.1",
   "description": "FerriteDB sidecar binary for Linux x64",
   "license": "SEE LICENSE IN LICENSE",
   "repository": "github:Koray-Ozt/FerriteDB",

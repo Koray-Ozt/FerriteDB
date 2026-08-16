@@ -2,6 +2,15 @@
 
 All notable changes to FerriteDB are documented here.
 
+## 0.2.0-beta.1
+
+### Added
+
+- Fixed-page storage engine (`pager.rs`): 4 KiB and 8 KiB page layouts, `FERRITE\0` binary header metadata, LIFO free-list recycling, RAII page reference guards, and crash-safe WAL sequence synchronization (#5).
+- Slotted-page frame architecture (`slotted_page.rs`): forward slot directory, backward payload packing, tombstone slot reuse, compact-on-write defragmentation, and multi-page overflow records up to 64 KiB (#6).
+- Memory-bounded Buffer Pool Manager (`buffer_pool.rs`): configurable RAM budget (default 64 MiB / 16,384 frames), second-chance `CLOCK` and `LRU-K` eviction policies, atomic pin counting, and strict WAL-pinned dirty page eviction invariant (#7).
+- Continuous performance & latency regression suite (`workload.rs`, `bench_metrics.rs`, `ferrite-bench` CLI, `benches/`): Criterion benchmarks for core storage layers, full YCSB Workload A–F generator with Uniform/Zipfian/Latest distributions, microsecond latency percentile histograms, WAL write amplification analysis, and CI regression gate (#8).
+
 ## 0.1.0-beta.1
 
 ### Added

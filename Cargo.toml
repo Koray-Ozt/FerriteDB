@@ -3,6 +3,6 @@ members = ["crates/ferrite-core", "crates/ferrite-cli"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 edition = "2024"
 license = "LicenseRef-FSL-1.1-ALv2"
